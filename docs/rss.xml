@@ -1,5 +1,72 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 03:39:01 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>窗口函数的一些使用</title><link>https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</link><description>#### 1. 取最近一个不为空的值填充
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 03:39:29 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>解决Join数据倾斜</title><link>https://enderTree.github.io/blog/post/jie-jue-Join-shu-ju-qing-xie.html</link><description>优化前：
+```sql
+SELECT 
+        /*+ mapjoin(dd),skewjoin(a(url))*/
+        a.* except(url_tag, join_key),
+        CASE 
+            WHEN cc.url IS NOT NULL THEN 'black_url'
+            WHEN dd.url IS NOT NULL THEN 'black_url'
+            ELSE ''
+        END AS url_tag
+    FROM
+    (
+        select 
+            *,
+            1 AS join_key
+        from 
+            dwd_crawler_urls_step1_di a 
+        where 
+            ymd = '${P_DATE}'
+            AND url_tag != 'black_url'
+    ) as
+    LEFT JOIN 
+        black_urls2 cc  
+        ON replace(a.host, 'www.', '') = replace(cc.url, 'www.', '')
+	LEFT JOIN 
+        black_urls1 dd  
+        ON INSTR(a.url, dd.url) &gt; 0
+```
+优化后
+```sql
+SELECT 
+        /*+ mapjoin(dd),skewjoin(a(url))*/
+        a.* except(url_tag, join_key),
+        CASE 
+            WHEN cc.url IS NOT NULL THEN 'black_url'
+            WHEN dd.url IS NOT NULL THEN 'black_url'
+            ELSE ''
+        END AS url_tag
+    FROM
+    (
+        select 
+            *,
+            1 AS join_key
+        from 
+            dwd_crawler_urls_step1_di a 
+        where 
+            ymd = '${P_DATE}'
+            AND url_tag != 'black_url'
+    ) a
+    LEFT JOIN 
+        black_urls1 dd  
+        ON INSTR(a.url, dd.url) &gt; 0
+    LEFT JOIN 
+        black_urls2 cc  
+        ON replace(a.host, 'www.', '') = replace(cc.url, 'www.', '')
+```
+优化前执行时间
+
+&lt;img width='991' alt='Image' src='https://github.com/user-attachments/assets/3d62cdfd-b1e0-4579-adc9-a8bc19ac64ff' /&gt;
+
+&lt;img width='872' alt='Image' src='https://github.com/user-attachments/assets/46033d2f-9fbe-4400-b6c6-489f97ee7f00' /&gt;
+
+优化后执行时间
+
+&lt;img width='978' alt='Image' src='https://github.com/user-attachments/assets/74de5fc3-08ff-4ed6-8c94-9b0d31c18799' /&gt;
+
+&lt;img width='944' alt='Image' src='https://github.com/user-attachments/assets/b2f397da-420d-484b-9655-3dda6ee57046' /&gt;
+。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/jie-jue-Join-shu-ju-qing-xie.html</guid><pubDate>Wed, 25 Jun 2025 03:39:03 +0000</pubDate></item><item><title>窗口函数的一些使用</title><link>https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</link><description>#### 1. 取最近一个不为空的值填充
 ```sql
 WITH mian_data AS (
     SELECT
