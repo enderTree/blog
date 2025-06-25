@@ -1,5 +1,28 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 03:28:49 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>test</title><link>https://enderTree.github.io/blog/post/test.html</link><description>```sql
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 03:39:01 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>窗口函数的一些使用</title><link>https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</link><description>#### 1. 取最近一个不为空的值填充
+```sql
+WITH mian_data AS (
+    SELECT
+        c0,
+        c1,
+        IF(c1 = '处置', NULL, c2) AS c2
+    FROM
+        VALUES
+         (1,'处置','1')
+        ,(2,'处置','2')
+        ,(3,'处置','3')
+        ,(4,'处置','4')
+        ,(5,'提交','A')
+        ,(6,'处置','5')
+        ,(7,'提交','b')
+    AS a(c0,c1,c2)
+)
+SELECT 
+    *,
+    FIRST_VALUE(c2, True) over(order by c0 ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
+FROM 
+    mian_data 
+```。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</guid><pubDate>Wed, 25 Jun 2025 03:38:36 +0000</pubDate></item><item><title>test</title><link>https://enderTree.github.io/blog/post/test.html</link><description>```sql
 
 SELECT
     *
