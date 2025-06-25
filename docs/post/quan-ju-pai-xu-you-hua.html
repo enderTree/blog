@@ -12,73 +12,113 @@
     </script>
 <meta name="description" content="```sql
 
-SELECT
-    *
-FROM
+CREATE TABLE talkie_dialogue.tmp_nana_data_1028_555 AS 
+WITH hash_bucket AS (
+    SELECT  
+        *,
+        ROW_NUMBER() OVER (PARTITION BY bucket_no ORDER BY user_msg_log_ucnt_30d ASC ) AS bucket_rel_index,
+        COUNT(1) OVER (PARTITION BY bucket_no ) AS bucket_size
+    FROM    
+    (
+        SELECT  
+            *,
+            ABS(HASH(cid)) % 100000 AS bucket_no 
+        FROM    
+            talkie_dialogue.tmp_nana_data_1028_4            
+    ) 
+),
+bucket_base AS 
 (
-
     SELECT
-        tag,
-        doc_cnt,
-        (doc_cnt/SUM(doc_cnt) OVER())*100
+        bucket_no
+        SUM(bucket_size) OVER (ORDER BY bucket_no ASC) - bucket_size AS bucket_base
     FROM
     (
         SELECT 
-            tag,
-            SUM(doc_cnt) AS doc_cnt
+            bucket_no,
+            bucket_size
         FROM
-            dwd_crawler_host_classification_di a
-        LEFT ANTI JOIN 
-            tmp_gumu_data_0624_2 b
-            ON a.host = b.host
-        WHERE
-            ymd = '2025-06-23'
-            AND tag_type = 'topic'
-        GROUP BY 
-            tag
+            hash_bucket
     )
 )
-WHERE 
-    tag = 'Advertising_&_Marketing'
+SELECT
+    /*+ MAPJOIN(t2) */ t1.*,
+    t2.bucket_base + bucket_rel_index AS id_index
+FROM
+    hash_bucket t1 
+JOIN 
+    bucket_base t2 
+    ON t1.bucket_no = t2.bucket_no
+    AND t1.mid_rank = t2.mid_rank
+    AND t1.country_rank = t2.country_rank
+    AND t1.setting_type = t2.setting_type
 ;
-```。">
-<meta property="og:title" content="test">
+```
+
+核心代码如上，主要思路先做分桶进行分布式局部排序、再基于桶大小得到全局索引
+
+1. 第一步先对id做hash分桶，然后计算每个桶的大小，桶数量可以根据需要计算的id数量来评估，这里分100000个桶，然后计算出每个id在桶内的相对位置bucket_rel_index，同时计算出桶大小bucket_size；
+2. 第二步根据桶大小计算每个桶的基址；
+3. 第三步将桶基址+id在桶内的相对地址得到全局唯一的绝对地址id_index；
+
+。">
+<meta property="og:title" content="全局排序优化">
 <meta property="og:description" content="```sql
 
-SELECT
-    *
-FROM
+CREATE TABLE talkie_dialogue.tmp_nana_data_1028_555 AS 
+WITH hash_bucket AS (
+    SELECT  
+        *,
+        ROW_NUMBER() OVER (PARTITION BY bucket_no ORDER BY user_msg_log_ucnt_30d ASC ) AS bucket_rel_index,
+        COUNT(1) OVER (PARTITION BY bucket_no ) AS bucket_size
+    FROM    
+    (
+        SELECT  
+            *,
+            ABS(HASH(cid)) % 100000 AS bucket_no 
+        FROM    
+            talkie_dialogue.tmp_nana_data_1028_4            
+    ) 
+),
+bucket_base AS 
 (
-
     SELECT
-        tag,
-        doc_cnt,
-        (doc_cnt/SUM(doc_cnt) OVER())*100
+        bucket_no
+        SUM(bucket_size) OVER (ORDER BY bucket_no ASC) - bucket_size AS bucket_base
     FROM
     (
         SELECT 
-            tag,
-            SUM(doc_cnt) AS doc_cnt
+            bucket_no,
+            bucket_size
         FROM
-            dwd_crawler_host_classification_di a
-        LEFT ANTI JOIN 
-            tmp_gumu_data_0624_2 b
-            ON a.host = b.host
-        WHERE
-            ymd = '2025-06-23'
-            AND tag_type = 'topic'
-        GROUP BY 
-            tag
+            hash_bucket
     )
 )
-WHERE 
-    tag = 'Advertising_&_Marketing'
+SELECT
+    /*+ MAPJOIN(t2) */ t1.*,
+    t2.bucket_base + bucket_rel_index AS id_index
+FROM
+    hash_bucket t1 
+JOIN 
+    bucket_base t2 
+    ON t1.bucket_no = t2.bucket_no
+    AND t1.mid_rank = t2.mid_rank
+    AND t1.country_rank = t2.country_rank
+    AND t1.setting_type = t2.setting_type
 ;
-```。">
+```
+
+核心代码如上，主要思路先做分桶进行分布式局部排序、再基于桶大小得到全局索引
+
+1. 第一步先对id做hash分桶，然后计算每个桶的大小，桶数量可以根据需要计算的id数量来评估，这里分100000个桶，然后计算出每个id在桶内的相对位置bucket_rel_index，同时计算出桶大小bucket_size；
+2. 第二步根据桶大小计算每个桶的基址；
+3. 第三步将桶基址+id在桶内的相对地址得到全局唯一的绝对地址id_index；
+
+。">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://enderTree.github.io/blog/post/test.html">
+<meta property="og:url" content="https://enderTree.github.io/blog/post/quan-ju-pai-xu-you-hua.html">
 <meta property="og:image" content="https://github.githubassets.com/favicons/favicon.svg">
-<title>test</title>
+<title>全局排序优化</title>
 <link href="//unpkg.com/@wooorm/starry-night@2.1.1/style/both.css" rel="stylesheet" />
 
 
@@ -121,7 +161,7 @@ body{box-sizing: border-box;min-width: 200px;max-width: 900px;margin: 20px auto;
 
 <body>
     <div id="header">
-<h1 class="postTitle">test</h1>
+<h1 class="postTitle">全局排序优化</h1>
 <div class="title-right">
     <a href="https://enderTree.github.io/blog" id="buttonHome" class="btn btn-invisible circle" title="首页">
         <svg class="octicon" width="16" height="16">
@@ -129,7 +169,7 @@ body{box-sizing: border-box;min-width: 200px;max-width: 900px;margin: 20px auto;
         </svg>
     </a>
     
-    <a href="https://github.com/enderTree/blog/issues/1" target="_blank" class="btn btn-invisible circle" title="Issue">
+    <a href="https://github.com/enderTree/blog/issues/4" target="_blank" class="btn btn-invisible circle" title="Issue">
         <svg class="octicon" width="16" height="16">
             <path id="pathIssue" fill-rule="evenodd"></path>
         </svg>
@@ -145,35 +185,53 @@ body{box-sizing: border-box;min-width: 200px;max-width: 900px;margin: 20px auto;
 </div>
 </div>
     <div id="content">
-<div class="markdown-body" id="postBody"><div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">SELECT</span>
-    <span class="pl-k">*</span>
-<span class="pl-k">FROM</span>
+<div class="markdown-body" id="postBody"><div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">CREATE</span> <span class="pl-k">TABLE</span> <span class="pl-en">talkie_dialogue</span>.tmp_nana_data_1028_555 <span class="pl-k">AS</span> 
+WITH hash_bucket <span class="pl-k">AS</span> (
+    <span class="pl-k">SELECT</span>  
+        <span class="pl-k">*</span>,
+        ROW_NUMBER() OVER (PARTITION BY bucket_no <span class="pl-k">ORDER BY</span> user_msg_log_ucnt_30d <span class="pl-k">ASC</span> ) <span class="pl-k">AS</span> bucket_rel_index,
+        <span class="pl-c1">COUNT</span>(<span class="pl-c1">1</span>) OVER (PARTITION BY bucket_no ) <span class="pl-k">AS</span> bucket_size
+    <span class="pl-k">FROM</span>    
+    (
+        <span class="pl-k">SELECT</span>  
+            <span class="pl-k">*</span>,
+            ABS(HASH(cid)) % <span class="pl-c1">100000</span> <span class="pl-k">AS</span> bucket_no 
+        <span class="pl-k">FROM</span>    
+            <span class="pl-c1">talkie_dialogue</span>.<span class="pl-c1">tmp_nana_data_1028_4</span>            
+    ) 
+),
+bucket_base <span class="pl-k">AS</span> 
 (
-
     <span class="pl-k">SELECT</span>
-        tag,
-        doc_cnt,
-        (doc_cnt<span class="pl-k">/</span><span class="pl-c1">SUM</span>(doc_cnt) OVER())<span class="pl-k">*</span><span class="pl-c1">100</span>
+        bucket_no
+        <span class="pl-c1">SUM</span>(bucket_size) OVER (<span class="pl-k">ORDER BY</span> bucket_no <span class="pl-k">ASC</span>) <span class="pl-k">-</span> bucket_size <span class="pl-k">AS</span> bucket_base
     <span class="pl-k">FROM</span>
     (
         <span class="pl-k">SELECT</span> 
-            tag,
-            <span class="pl-c1">SUM</span>(doc_cnt) <span class="pl-k">AS</span> doc_cnt
+            bucket_no,
+            bucket_size
         <span class="pl-k">FROM</span>
-            dwd_crawler_host_classification_di a
-        LEFT ANTI <span class="pl-k">JOIN</span> 
-            tmp_gumu_data_0624_2 b
-            <span class="pl-k">ON</span> <span class="pl-c1">a</span>.<span class="pl-c1">host</span> <span class="pl-k">=</span> <span class="pl-c1">b</span>.<span class="pl-c1">host</span>
-        <span class="pl-k">WHERE</span>
-            ymd <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">'</span>2025-06-23<span class="pl-pds">'</span></span>
-            <span class="pl-k">AND</span> tag_type <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">'</span>topic<span class="pl-pds">'</span></span>
-        <span class="pl-k">GROUP BY</span> 
-            tag
+            hash_bucket
     )
 )
-<span class="pl-k">WHERE</span> 
-    tag <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">'</span>Advertising_&amp;_Marketing<span class="pl-pds">'</span></span>
-;</pre></div></div>
+<span class="pl-k">SELECT</span>
+    <span class="pl-c"><span class="pl-c">/*</span>+ MAPJOIN(t2) <span class="pl-c">*/</span></span> t1.<span class="pl-k">*</span>,
+    <span class="pl-c1">t2</span>.<span class="pl-c1">bucket_base</span> <span class="pl-k">+</span> bucket_rel_index <span class="pl-k">AS</span> id_index
+<span class="pl-k">FROM</span>
+    hash_bucket t1 
+<span class="pl-k">JOIN</span> 
+    bucket_base t2 
+    <span class="pl-k">ON</span> <span class="pl-c1">t1</span>.<span class="pl-c1">bucket_no</span> <span class="pl-k">=</span> <span class="pl-c1">t2</span>.<span class="pl-c1">bucket_no</span>
+    <span class="pl-k">AND</span> <span class="pl-c1">t1</span>.<span class="pl-c1">mid_rank</span> <span class="pl-k">=</span> <span class="pl-c1">t2</span>.<span class="pl-c1">mid_rank</span>
+    <span class="pl-k">AND</span> <span class="pl-c1">t1</span>.<span class="pl-c1">country_rank</span> <span class="pl-k">=</span> <span class="pl-c1">t2</span>.<span class="pl-c1">country_rank</span>
+    <span class="pl-k">AND</span> <span class="pl-c1">t1</span>.<span class="pl-c1">setting_type</span> <span class="pl-k">=</span> <span class="pl-c1">t2</span>.<span class="pl-c1">setting_type</span>
+;</pre></div>
+<p>核心代码如上，主要思路先做分桶进行分布式局部排序、再基于桶大小得到全局索引</p>
+<ol>
+<li>第一步先对id做hash分桶，然后计算每个桶的大小，桶数量可以根据需要计算的id数量来评估，这里分100000个桶，然后计算出每个id在桶内的相对位置bucket_rel_index，同时计算出桶大小bucket_size；</li>
+<li>第二步根据桶大小计算每个桶的基址；</li>
+<li>第三步将桶基址+id在桶内的相对地址得到全局唯一的绝对地址id_index；</li>
+</ol></div>
 <div style="font-size:small;margin-top:8px;float:right;"></div>
 
 <button class="btn btn-block" type="button" onclick="openComments()" id="cmButton">评论</button>
@@ -232,11 +290,7 @@ console.log("\n %c Gmeek last https://github.com/Meekdai/Gmeek \n","padding:5px 
 <script>
 document.getElementById("pathHome").setAttribute("d",IconList["home"]);
 document.getElementById("pathIssue").setAttribute("d",IconList["github"]);
-cmButton=document.getElementById("cmButton");
-    span=document.createElement("span");
-    span.setAttribute("class","Counter");
-    span.innerHTML="1";
-    cmButton.appendChild(span);
+
 
 
 function openComments(){
