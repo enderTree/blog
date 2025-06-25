@@ -1,5 +1,47 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 07:53:07 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>MaxCompute外表使用</title><link>https://enderTree.github.io/blog/post/MaxCompute-wai-biao-shi-yong.html</link><description>### 1. 建表
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 11:06:40 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>阿里云个人使用的一些姿势</title><link>https://enderTree.github.io/blog/post/a-li-yun-ge-ren-shi-yong-de-yi-xie-zi-shi.html</link><description># 阿里云个人使用的一些姿势
+
+## 一、登录
+
+[登录 dataworks](https://dataworks.console.aliyun.com/workspace/list)，选择对应工作空间进入，显示无空间找管理员开通
+
+&lt;img width='1693' alt='Image' src='https://github.com/user-attachments/assets/b2e470eb-06e2-4c2c-8d12-da6232adc7b2' /&gt;
+
+&lt;img width='1238' alt='Image' src='https://github.com/user-attachments/assets/2408c27a-fcf3-4631-a68a-2f3005c49936' /&gt;
+
+## 二、临时 Sql 运行
+
+临时查询下新建一个目录，在下面新建 odps sql 节点即可
+
+## 三、周期任务
+
+### sql 任务
+
+业务流程 MaxCompute 数据开发目录下新建 ODPS Sql 节点
+
+### PySpark 简单模式
+
+[官方文档](https://help.aliyun.com/zh/maxcompute/user-guide/develop-a-spark-on-maxcompute-application-by-using-pyspark?spm=a2c4g.11186623.0.i2)
+
+1. 资源中新建 python 脚本
+   
+&lt;img width='443' alt='Image' src='https://github.com/user-attachments/assets/9e325886-5153-4c75-b19b-23fa6476f1b6' /&gt;
+
+ ```python
+from pyspark.sql import SparkSession
+if __name__ == '__main__':
+spark = SparkSession.builder.appName('spark sql').getOrCreate()
+spark.sql('SELECT 1').show()
+```
+2. 数据开发文件夹新建odps spark节点
+
+&lt;img width='735' alt='Image' src='https://github.com/user-attachments/assets/e4a30db5-a9b3-4110-bd83-85c764450f39' /&gt;
+
+发布上线皆可，sparkui会在日志中打印
+
+### PySpark兼容模式
+
+阿里云的PySpark是基于Python 3.7 + Spark2的，而且看上去已经疏于维护了。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/a-li-yun-ge-ren-shi-yong-de-yi-xie-zi-shi.html</guid><pubDate>Wed, 25 Jun 2025 11:06:12 +0000</pubDate></item><item><title>MaxCompute外表使用</title><link>https://enderTree.github.io/blog/post/MaxCompute-wai-biao-shi-yong.html</link><description>### 1. 建表
 1. json格式
 
 ```sql
