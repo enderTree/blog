@@ -1,5 +1,98 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 07:30:42 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>表命名规范</title><link>https://enderTree.github.io/blog/post/biao-ming-ming-gui-fan.html</link><description>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 07:53:07 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>MaxCompute外表使用</title><link>https://enderTree.github.io/blog/post/MaxCompute-wai-biao-shi-yong.html</link><description>### 1. 建表
+1. json格式
+
+```sql
+CREATE EXTERNAL TABLE IF NOT EXISTS dialogue.dwd_ext_xingye_log_chatml_data(
+    `data` STRING
+) 
+PARTITIONED BY (
+    data_type STRING,
+    ymd STRING) 
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe' 
+STORED AS INPUTFORMAT 'org.apache.hadoop.mapred.TextInputFormat' 
+OUTPUTFORMAT 'org.apache.hadoop.mapred.TextOutputFormat' 
+LOCATION 'oss://data-dlc/minimax-dialogue/data/chatml/';
+```
+
+2. parquet格式
+   ```sql
+   CREATE EXTERNAL TABLE dwd_crawler_html_out_di
+   (
+      url string,
+       html string,
+       source_tag string,
+       lang string
+   )
+   partitioned BY (ymd string)
+   stored AS parquet  
+   location 'oss://data-dlc/minimax-dialogue/data/chatml/data_type=html_data/';
+   ```
+3. 自定义解析器
+```sql
+CREATE EXTERNAL TABLE ods_crawler_sites_warc_data_extract_result_external_hi (
+    warc_host string,
+    meta_info string,
+    final_url string,
+    status_code string,
+    data_dt string,
+    biz_code string,
+    target_url string,
+    warc_date string,
+    content_type string,
+    content_length string,
+    warc_file_name string,
+    content string,
+    import_msg string
+)
+PARTITIONED BY (
+    host string,
+    status string,
+    ymd string,
+    hour string
+)
+stored BY 'com.crawler.udf.sites_warc.WarcStorageHandler' 
+with serdeproperties (
+    'max_file_size' = '157286400'
+) 
+LOCATION 'oss://crawler-data-storage/Crawlerlee/'
+USING 'crawler_udf-1.0-SNAPSHOT.jar'
+```
+可参考这篇文章
+
+### 2. 使用
+1. 插入数据
+```sql
+SET odps.sql.unstructured.oss.commit.mode = true; -- 防止生成.odps文件夹
+INSERT OVERWRITE TABLE dwd_crawler_html_out_di PARTITION(ymd='${P_DATE}')
+SELECT 
+    a.source_url,
+    html,
+    biz_code,
+    parse_lang
+FROM 
+    dwd_crawler_content_filtered_detail_byscore_di a
+WHERE 
+    a.ymd = '${P_DATE}'
+    AND a.score_level != 'low'
+    AND COALESCE(html, '') != ''
+```
+2. 读取数据
+```
+-- 扫描所有路径
+msck TABLE ods_crawler_sites_warc_data_extract_result_external_hi ADD partitions;
+-- 扫描指定路径
+ALTER TABLE ods_crawler_sites_warc_data_extract_result_external_hi ADD IF NOT EXISTS 
+PARTITION (host='demo.com',status='error',ymd='20250624', hour='09') 
+PARTITION (host='demo.com',status='success',ymd='20250624', hour='09')
+;
+-- 指定location
+ALTER TABLE log_table_external ADD PARTITION (year = '2016', month = '06', day = '01')
+location 'oss://oss-cn-hangzhou-internal.aliyuncs.com/bucket名称/oss-odps-test/log_data_customized/2016/06/01/';
+-- 指定路径映射
+MSCK REPAIR TABLE  ods_crawler_sites_warc_data_extract_result_external_hi ADD PARTITIONS
+WITH PROPERTIES ('odps.msck.partition.column.mapping'='host:host,status:status,ymd:ymd');
+```。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/MaxCompute-wai-biao-shi-yong.html</guid><pubDate>Wed, 25 Jun 2025 07:38:39 +0000</pubDate></item><item><title>表命名规范</title><link>https://enderTree.github.io/blog/post/biao-ming-ming-gui-fan.html</link><description>
 ### 1. 数仓分层
 按 ods -&gt; dwd -&gt; dwm -&gt; dws -&gt;ads 来做
 - dwd：事实级别的明细，或者did uid级的数据。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/biao-ming-ming-gui-fan.html</guid><pubDate>Wed, 25 Jun 2025 07:30:17 +0000</pubDate></item><item><title>全局排序优化</title><link>https://enderTree.github.io/blog/post/quan-ju-pai-xu-you-hua.html</link><description>```sql
