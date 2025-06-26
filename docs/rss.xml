@@ -1,5 +1,34 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Wed, 25 Jun 2025 11:44:55 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>阿里云个人使用的一些姿势</title><link>https://enderTree.github.io/blog/post/a-li-yun-ge-ren-shi-yong-de-yi-xie-zi-shi.html</link><description># 阿里云个人使用的一些姿势
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Thu, 26 Jun 2025 09:12:11 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>使用MaxFrame将oss文件入库</title><link>https://enderTree.github.io/blog/post/shi-yong-MaxFrame-jiang-oss-wen-jian-ru-ku.html</link><description>1. oss配置
+```python
+OSS_ACCESS_ID = ''  # OSS 的 Access ID
+OSS_SECRET_ACCESS_KEY = ''  # OSS 的 Secret ID
+
+# 填写 Bucket 信息
+OSS_INTERNET_ENDPOINT = (
+    'oss-cn-shanghai.aliyuncs.com'  # OSS 的公网访问 endpoint，您也可以使用 sts token
+)
+OSS_INTERNAL_ENDPOINT = 'oss-cn-shanghai-internal.aliyuncs.com'  # OSS 的公网访问 endpoint，您也可以使用 sts token
+OSS_BUCKET_NAME = 'crawler-data-storage'  # OSS Bucket 的名字
+OSS_BUCKET_ENDPOINT = f'{OSS_BUCKET_NAME}.{OSS_INTERNET_ENDPOINT}:80'
+OSS_BUCKET_ENDPOINT
+
+import oss2
+from oss2 import defaults
+defaults.connection_pool_size = 50
+
+auth = oss2.Auth(OSS_ACCESS_ID, OSS_SECRET_ACCESS_KEY)
+bucket = oss2.Bucket(auth, OSS_INTERNET_ENDPOINT, OSS_BUCKET_NAME)
+```
+2. 定义oss文件扫描方法
+```python
+import oss2
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def get_oss_files(bucket, prefix, ext='.snappy.parquet', max_size=1 * 1024 * 1024 * 1024 * 1024):
+    '''
+    使用多线程遍历 OSS 路径下的所有目录。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/shi-yong-MaxFrame-jiang-oss-wen-jian-ru-ku.html</guid><pubDate>Thu, 26 Jun 2025 09:11:43 +0000</pubDate></item><item><title>阿里云个人使用的一些姿势</title><link>https://enderTree.github.io/blog/post/a-li-yun-ge-ren-shi-yong-de-yi-xie-zi-shi.html</link><description># 阿里云个人使用的一些姿势
 
 ## 一、登录
 
