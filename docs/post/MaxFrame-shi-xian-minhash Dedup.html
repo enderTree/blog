@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html data-color-mode="light" data-dark-theme="dark" data-light-theme="light" lang="zh-CN">
+<head>
+    <meta content="text/html; charset=utf-8" http-equiv="content-type" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <link href='https://mirrors.sustech.edu.cn/cdnjs/ajax/libs/Primer/21.0.7/primer.css' rel='stylesheet' />
+    
+    <link rel="icon" href="https://github.githubassets.com/favicons/favicon.svg"><script>
+        let theme = localStorage.getItem("meek_theme") || "light";
+        document.documentElement.setAttribute("data-color-mode", theme);
+    </script>
+<meta name="description" content="```python
+import re
+from itertools import tee
+from typing import Iterable, Set, List
+
+import numpy as np
+import maxframe.dataframe as md
+from maxframe import options
+from maxframe.session import new_session
+from maxframe.udf import with_python_requirements
+from maxframe.learn.contrib.graph import connected_components
+from odps import ODPS
+
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+SEED = 42
+NON_ALPHA = re.compile('[^A-Za-z_0-9]')
+RNG = np.random.RandomState(SEED)
+MAX_HASH = np.uint64((1 << 32) - 1)
+MERSENNE_PRIME = np.uint64((1 << 61) - 1)
+
+
+# 通过相似度阈值和哈希函数个数，生成条带数量和条带行数参数
+def optimal_param(
+    threshold: float,
+    num_perm: int,
+    false_positive_weight: float = 0.5,
+    false_negative_weight: float = 0.5,
+):
+    from scipy.integrate import quad as integrate
+
+    def false_positive_probability(threshold: float, b: int, r: int):
+        '''Source: `datasketch.lsh`'''
+
+        def proba(s):
+            return 1 - (1 - s ** float(r)) ** float(b)
+
+        a, _ = integrate(proba, 0.0, threshold)
+        return a
+
+    def false_negative_probability(threshold: float, b: int, r: int):
+        '''Source: `datasketch.lsh`'''
+
+        def proba(s):
+            return 1 - (1 - (1 - s ** float(r)) ** float(b))
+
+        a, _ = integrate(proba, threshold, 1.0)
+        return a
+
+    min_error = float('inf')
+    opt = (0, 0)
+    for b in range(1, num_perm + 1):
+        max_r = int(num_perm / b)
+        for r in range(1, max_r + 1):
+            fp = false_positive_probability(threshold, b, r)
+            fn = false_negative_probability(threshold, b, r)
+            error = fp * false_positive_weight + fn * false_negative_weight
+            if error < min_error:
+                min_error = error
+                opt = (b, r)
+    return opt
+
+
+# 依赖 xxhash 完成 hash
+@with_python_requirements('xxhash')
+def generate_hash_values(row):
+    idx = str(row[0])
+    content = row[1]
+
+    print(idx, content[:10], flush=True)
+
+    import xxhash
+
+    def ngrams(sequence: List[str], n: int, min_length: int = 5) -> Iterable:
+        if len(sequence) < min_length:
+            return []
+
+        iterables = tee(sequence, n)
+        for i, sub_iterable in enumerate(iterables):
+            for _ in range(i):
+                next(sub_iterable, None)
+        return zip(*iterables)
+
+    def ngram_hashes(content: str, n: int, min_length: int = 5) -> Set[int]:
+        import xxhash
+
+        # ========== edit ===========
+        tokens: List[str] = NON_ALPHA.split(content.lower())
+        ng: set[bytes] = {
+            bytes(' '.join(t).lower(), 'utf-8') for t in ngrams(tokens, n, min_length)
+        }
+        return {xxhash.xxh32_intdigest(n) for n in ng}
+
+    # 获取 hash 生成的排列的参数
+    a, b = PERMUTATIONS
+
+    # 获得 ngram hash
+    hashes = np.array(
+        list(ngram_hashes(content, args_ngram_size, args_min_length)), dtype=np.uint64
+    )
+
+    # 如果长度不足，不进行相似度判定
+    if len(hashes) == 0:
+        return
+
+    # 通过算法为每个 ngram 生成多个 hash 值
+    chunk_size = 100
+    min_hashes = np.full(args_num_perm, MAX_HASH)
+    for i in range(0, len(hashes), chunk_size):
+        chunk = hashes[i : i + chunk_size]
+        p_hashes = ((np.outer(chunk, a) + b) % MERSENNE_PRIME) & MAX_HASH
+        min_hashes = np.minimum(min_hashes, p_hashes.min(axis=0))
+
+    # 生成条带的 hash
+    Hs = [bytes(min_hashes[start:end].byteswap().data) for start, end in HASH_RANGES]
+
+    # 返回结果，结果为每个条带返回一行数据
+    for band_idx, H in enumerate(Hs):
+        yield band_idx, H.hex(), idx
+
+mapper_memory = 4096
+reducer_memory = 12288
+joiner_memory = 12288
+mapper_split_size = 1024
+instance_num = 50000
+
+input_table = 'xxx'
+output_table = 'xxxx1'
+
+# content_hash
+process_column = 'content_hash'  #之后需要改为content
+lifecycle = 365
+partitions = None  # or None
+
+# 相似度阈值
+args_threshold = 0.6  # 0.6
+# 文本长度限制
+args_min_length = 5  # 5
+args_ngram_size = 5  # 5
+# hash 函数个数
+args_num_perm = 256  # 256
+
+# 关闭查询加速，在这个场景计算时间偏长，不适用mcqa
+options.sql.enable_mcqa = False
+
+sql_settings = {
+    'odps.namespace.schema': 'true',
+    'odps.session.image': 'common',
+    'odps.function.timeout': 3600,
+    'odps.sql.mapper.memory': mapper_memory,  # 弹内
+    'odps.stage.mapper.mem': mapper_memory,  # 弹外
+    'odps.sql.reducer.memory': reducer_memory,  # 弹内
+    'odps.stage.reducer.mem': reducer_memory,  # 弹外
+    'odps.sql.joiner.memory': joiner_memory,  # 弹内
+    'odps.stage.joiner.mem': joiner_memory,  # 弹外
+    'odps.stage.mapper.split.size': mapper_split_size,
+    'odps.sql.cfile2.field.maxsize': 268435456,
+    'odps.task.merge.enabled': False,
+    'odps.sql.allow.fullscan': 'true',
+    'odps.dag2.compound.config': 'fuxi.worker.reuse.policy:NO_REUSE',
+    'odps.sql.window.function.newimpl': 'false',
+}
+
+# 设置最大列的大小，并发
+if instance_num:
+    sql_settings.update(
+        {
+            'odps.sql.split.dop': {input_table: int(instance_num)},
+            'odps.stage.reducer.num': 5000,
+            'odps.stage.joiner.num': 5000,
+            'odps.sql.sys.flag.fuxi_MaxTaskWorkerCount': int(instance_num),
+            'odps.sql.max.desired.parallelism': int(instance_num),
+            'odps.job.workers.limit': int(instance_num),
+        }
+    )
+options.sql.settings = sql_settings
+options.dag.settings.update({'codegen.groupby_first_value_allowed': 'true'})
+
+o = ODPS(
+    access_id='',
+    secret_access_key='',
+    project='xxx',
+    # endpoint='http://service.cn-hangzhou.maxcompute.aliyun.com/api',
+    endpoint='https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api',
+)
+
+session = new_session(o)
+print('session id: ', session.session_id, flush=True)
+print('session logview: ', session.get_logview_address(), flush=True)
+
+B, R = optimal_param(args_threshold, args_num_perm)
+
+# 生成 HashRange
+HASH_RANGES = [(i * R, (i + 1) * R) for i in range(B)]
+
+# 生成 Hash 函数参数
+PERMUTATIONS = np.array(
+    [
+        (
+            RNG.randint(1, MERSENNE_PRIME, dtype=np.uint64),
+            RNG.randint(0, MERSENNE_PRIME, dtype=np.uint64),
+        )
+        for _ in range(args_num_perm)
+    ],
+    dtype=np.uint64,
+).T
+
+df = md.read_odps_table(input_table, partitions=partitions)
+
+# 直接对相同文本去重
+df = df.drop_duplicates(subset=[process_column], keep='first')
+
+# # 过滤 text 为空的行, 生成 index 列
+df = df.reset_index(drop=False).rename(columns={'index': '_doc_id'})
+# 触发计算并缓存结果, 通过 display 预览
+df.execute()
+
+# # 投影出所需的数据
+docid_docinfo_df = df[['_doc_id', process_column]]
+
+# # 应用 udtf 生成所有的 MinHash 和 LSH
+hash_df = docid_docinfo_df.mf.flatmap(
+    generate_hash_values,
+    dtypes={'band_idx': np.int_, 'hash': np.str_, '_doc_id': np.str_},
+    raw=True,
+)
+
+hash_df_temp = 'tmp_hash_df'
+md.to_odps_table(
+    hash_df, hash_df_temp, index=False, overwrite=True, lifecycle=7
+).execute()
+
+components_df = md.read_odps_query(
+    f'''
+    select distinct similar_docs as index, similar_docs as id, _doc_id as component from (
+        select cast (_doc_id as bigint) as similar_docs,
+                            MIN(cast (_doc_id as bigint)) over(PARTITION BY band_idx, hash) as _doc_id,
+                            RANK() over (PARTITION BY band_idx,hash ORDER BY cast (_doc_id as bigint) ASC) as rnk from {hash_df_temp}
+    ) where rnk > 1
+    ''',
+    index_col='index',
+)
+converged = False
+
+round = 0
+# 计算完整联通分量
+while not converged:
+    round = round + 1
+    components_df, converged_scalar = connected_components(
+        components_df, 'id', 'component', 6
+    )
+    session.execute(components_df, converged_scalar)
+    converged = converged_scalar.fetch()
+
+components_df = components_df.set_index('id')
+result_df = df.merge(components_df, left_on='_doc_id', right_index=True, how='left')
+result_df = result_df[result_df['component'].isnull()]
+result_df = result_df.drop(['component', '_doc_id'], axis=1)
+
+md.to_odps_table(
+    result_df, output_table, lifecycle=lifecycle, overwrite=True, index=False
+).execute()
+
+session.destroy()
+```。">
+<meta property="og:title" content="MaxFrame实现minhash Dedup">
+<meta property="og:description" content="```python
+import re
+from itertools import tee
+from typing import Iterable, Set, List
+
+import numpy as np
+import maxframe.dataframe as md
+from maxframe import options
+from maxframe.session import new_session
+from maxframe.udf import with_python_requirements
+from maxframe.learn.contrib.graph import connected_components
+from odps import ODPS
+
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+SEED = 42
+NON_ALPHA = re.compile('[^A-Za-z_0-9]')
+RNG = np.random.RandomState(SEED)
+MAX_HASH = np.uint64((1 << 32) - 1)
+MERSENNE_PRIME = np.uint64((1 << 61) - 1)
+
+
+# 通过相似度阈值和哈希函数个数，生成条带数量和条带行数参数
+def optimal_param(
+    threshold: float,
+    num_perm: int,
+    false_positive_weight: float = 0.5,
+    false_negative_weight: float = 0.5,
+):
+    from scipy.integrate import quad as integrate
+
+    def false_positive_probability(threshold: float, b: int, r: int):
+        '''Source: `datasketch.lsh`'''
+
+        def proba(s):
+            return 1 - (1 - s ** float(r)) ** float(b)
+
+        a, _ = integrate(proba, 0.0, threshold)
+        return a
+
+    def false_negative_probability(threshold: float, b: int, r: int):
+        '''Source: `datasketch.lsh`'''
+
+        def proba(s):
+            return 1 - (1 - (1 - s ** float(r)) ** float(b))
+
+        a, _ = integrate(proba, threshold, 1.0)
+        return a
+
+    min_error = float('inf')
+    opt = (0, 0)
+    for b in range(1, num_perm + 1):
+        max_r = int(num_perm / b)
+        for r in range(1, max_r + 1):
+            fp = false_positive_probability(threshold, b, r)
+            fn = false_negative_probability(threshold, b, r)
+            error = fp * false_positive_weight + fn * false_negative_weight
+            if error < min_error:
+                min_error = error
+                opt = (b, r)
+    return opt
+
+
+# 依赖 xxhash 完成 hash
+@with_python_requirements('xxhash')
+def generate_hash_values(row):
+    idx = str(row[0])
+    content = row[1]
+
+    print(idx, content[:10], flush=True)
+
+    import xxhash
+
+    def ngrams(sequence: List[str], n: int, min_length: int = 5) -> Iterable:
+        if len(sequence) < min_length:
+            return []
+
+        iterables = tee(sequence, n)
+        for i, sub_iterable in enumerate(iterables):
+            for _ in range(i):
+                next(sub_iterable, None)
+        return zip(*iterables)
+
+    def ngram_hashes(content: str, n: int, min_length: int = 5) -> Set[int]:
+        import xxhash
+
+        # ========== edit ===========
+        tokens: List[str] = NON_ALPHA.split(content.lower())
+        ng: set[bytes] = {
+            bytes(' '.join(t).lower(), 'utf-8') for t in ngrams(tokens, n, min_length)
+        }
+        return {xxhash.xxh32_intdigest(n) for n in ng}
+
+    # 获取 hash 生成的排列的参数
+    a, b = PERMUTATIONS
+
+    # 获得 ngram hash
+    hashes = np.array(
+        list(ngram_hashes(content, args_ngram_size, args_min_length)), dtype=np.uint64
+    )
+
+    # 如果长度不足，不进行相似度判定
+    if len(hashes) == 0:
+        return
+
+    # 通过算法为每个 ngram 生成多个 hash 值
+    chunk_size = 100
+    min_hashes = np.full(args_num_perm, MAX_HASH)
+    for i in range(0, len(hashes), chunk_size):
+        chunk = hashes[i : i + chunk_size]
+        p_hashes = ((np.outer(chunk, a) + b) % MERSENNE_PRIME) & MAX_HASH
+        min_hashes = np.minimum(min_hashes, p_hashes.min(axis=0))
+
+    # 生成条带的 hash
+    Hs = [bytes(min_hashes[start:end].byteswap().data) for start, end in HASH_RANGES]
+
+    # 返回结果，结果为每个条带返回一行数据
+    for band_idx, H in enumerate(Hs):
+        yield band_idx, H.hex(), idx
+
+mapper_memory = 4096
+reducer_memory = 12288
+joiner_memory = 12288
+mapper_split_size = 1024
+instance_num = 50000
+
+input_table = 'xxx'
+output_table = 'xxxx1'
+
+# content_hash
+process_column = 'content_hash'  #之后需要改为content
+lifecycle = 365
+partitions = None  # or None
+
+# 相似度阈值
+args_threshold = 0.6  # 0.6
+# 文本长度限制
+args_min_length = 5  # 5
+args_ngram_size = 5  # 5
+# hash 函数个数
+args_num_perm = 256  # 256
+
+# 关闭查询加速，在这个场景计算时间偏长，不适用mcqa
+options.sql.enable_mcqa = False
+
+sql_settings = {
+    'odps.namespace.schema': 'true',
+    'odps.session.image': 'common',
+    'odps.function.timeout': 3600,
+    'odps.sql.mapper.memory': mapper_memory,  # 弹内
+    'odps.stage.mapper.mem': mapper_memory,  # 弹外
+    'odps.sql.reducer.memory': reducer_memory,  # 弹内
+    'odps.stage.reducer.mem': reducer_memory,  # 弹外
+    'odps.sql.joiner.memory': joiner_memory,  # 弹内
+    'odps.stage.joiner.mem': joiner_memory,  # 弹外
+    'odps.stage.mapper.split.size': mapper_split_size,
+    'odps.sql.cfile2.field.maxsize': 268435456,
+    'odps.task.merge.enabled': False,
+    'odps.sql.allow.fullscan': 'true',
+    'odps.dag2.compound.config': 'fuxi.worker.reuse.policy:NO_REUSE',
+    'odps.sql.window.function.newimpl': 'false',
+}
+
+# 设置最大列的大小，并发
+if instance_num:
+    sql_settings.update(
+        {
+            'odps.sql.split.dop': {input_table: int(instance_num)},
+            'odps.stage.reducer.num': 5000,
+            'odps.stage.joiner.num': 5000,
+            'odps.sql.sys.flag.fuxi_MaxTaskWorkerCount': int(instance_num),
+            'odps.sql.max.desired.parallelism': int(instance_num),
+            'odps.job.workers.limit': int(instance_num),
+        }
+    )
+options.sql.settings = sql_settings
+options.dag.settings.update({'codegen.groupby_first_value_allowed': 'true'})
+
+o = ODPS(
+    access_id='',
+    secret_access_key='',
+    project='xxx',
+    # endpoint='http://service.cn-hangzhou.maxcompute.aliyun.com/api',
+    endpoint='https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api',
+)
+
+session = new_session(o)
+print('session id: ', session.session_id, flush=True)
+print('session logview: ', session.get_logview_address(), flush=True)
+
+B, R = optimal_param(args_threshold, args_num_perm)
+
+# 生成 HashRange
+HASH_RANGES = [(i * R, (i + 1) * R) for i in range(B)]
+
+# 生成 Hash 函数参数
+PERMUTATIONS = np.array(
+    [
+        (
+            RNG.randint(1, MERSENNE_PRIME, dtype=np.uint64),
+            RNG.randint(0, MERSENNE_PRIME, dtype=np.uint64),
+        )
+        for _ in range(args_num_perm)
+    ],
+    dtype=np.uint64,
+).T
+
+df = md.read_odps_table(input_table, partitions=partitions)
+
+# 直接对相同文本去重
+df = df.drop_duplicates(subset=[process_column], keep='first')
+
+# # 过滤 text 为空的行, 生成 index 列
+df = df.reset_index(drop=False).rename(columns={'index': '_doc_id'})
+# 触发计算并缓存结果, 通过 display 预览
+df.execute()
+
+# # 投影出所需的数据
+docid_docinfo_df = df[['_doc_id', process_column]]
+
+# # 应用 udtf 生成所有的 MinHash 和 LSH
+hash_df = docid_docinfo_df.mf.flatmap(
+    generate_hash_values,
+    dtypes={'band_idx': np.int_, 'hash': np.str_, '_doc_id': np.str_},
+    raw=True,
+)
+
+hash_df_temp = 'tmp_hash_df'
+md.to_odps_table(
+    hash_df, hash_df_temp, index=False, overwrite=True, lifecycle=7
+).execute()
+
+components_df = md.read_odps_query(
+    f'''
+    select distinct similar_docs as index, similar_docs as id, _doc_id as component from (
+        select cast (_doc_id as bigint) as similar_docs,
+                            MIN(cast (_doc_id as bigint)) over(PARTITION BY band_idx, hash) as _doc_id,
+                            RANK() over (PARTITION BY band_idx,hash ORDER BY cast (_doc_id as bigint) ASC) as rnk from {hash_df_temp}
+    ) where rnk > 1
+    ''',
+    index_col='index',
+)
+converged = False
+
+round = 0
+# 计算完整联通分量
+while not converged:
+    round = round + 1
+    components_df, converged_scalar = connected_components(
+        components_df, 'id', 'component', 6
+    )
+    session.execute(components_df, converged_scalar)
+    converged = converged_scalar.fetch()
+
+components_df = components_df.set_index('id')
+result_df = df.merge(components_df, left_on='_doc_id', right_index=True, how='left')
+result_df = result_df[result_df['component'].isnull()]
+result_df = result_df.drop(['component', '_doc_id'], axis=1)
+
+md.to_odps_table(
+    result_df, output_table, lifecycle=lifecycle, overwrite=True, index=False
+).execute()
+
+session.destroy()
+```。">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://enderTree.github.io/blog/post/MaxFrame-shi-xian-minhash%20Dedup.html">
+<meta property="og:image" content="https://github.githubassets.com/favicons/favicon.svg">
+<title>MaxFrame实现minhash Dedup</title>
+<link href="//unpkg.com/@wooorm/starry-night@2.1.1/style/both.css" rel="stylesheet" />
+
+
+</head>
+<style>
+body{box-sizing: border-box;min-width: 200px;max-width: 900px;margin: 20px auto;padding: 45px;font-size: 16px;font-family: sans-serif;line-height: 1.25;}
+#header{display:flex;padding-bottom:8px;border-bottom: 1px solid var(--borderColor-muted, var(--color-border-muted));margin-bottom: 16px;}
+#footer {margin-top:64px; text-align: center;font-size: small;}
+
+</style>
+
+<style>
+.postTitle{margin: auto 0;font-size:40px;font-weight:bold;}
+.title-right{display:flex;margin:auto 0 0 auto;}
+.title-right .circle{padding: 14px 16px;margin-right:8px;}
+#postBody{border-bottom: 1px solid var(--color-border-default);padding-bottom:36px;}
+#postBody hr{height:2px;}
+#cmButton{height:48px;margin-top:48px;}
+#comments{margin-top:64px;}
+.g-emoji{font-size:24px;}
+@media (max-width: 600px) {
+    body {padding: 8px;}
+    .postTitle{font-size:24px;}
+}
+.copy-feedback {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 50px;
+    color: var(--color-fg-on-emphasis);
+    background-color: var(--color-fg-muted);
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 12px;
+}
+</style>
+
+
+
+
+<body>
+    <div id="header">
+<h1 class="postTitle">MaxFrame实现minhash Dedup</h1>
+<div class="title-right">
+    <a href="https://enderTree.github.io/blog" id="buttonHome" class="btn btn-invisible circle" title="首页">
+        <svg class="octicon" width="16" height="16">
+            <path id="pathHome" fill-rule="evenodd"></path>
+        </svg>
+    </a>
+    
+    <a href="https://github.com/enderTree/blog/issues/10" target="_blank" class="btn btn-invisible circle" title="Issue">
+        <svg class="octicon" width="16" height="16">
+            <path id="pathIssue" fill-rule="evenodd"></path>
+        </svg>
+    </a>
+    
+
+    <a class="btn btn-invisible circle" onclick="modeSwitch();" title="切换主题">
+        <svg class="octicon" width="16" height="16" >
+            <path id="themeSwitch" fill-rule="evenodd"></path>
+        </svg>
+    </a>
+
+</div>
+</div>
+    <div id="content">
+<div class="markdown-body" id="postBody"><div class="highlight highlight-source-python"><pre class="notranslate"><span class="pl-k">import</span> <span class="pl-s1">re</span>
+<span class="pl-k">from</span> <span class="pl-s1">itertools</span> <span class="pl-k">import</span> <span class="pl-s1">tee</span>
+<span class="pl-k">from</span> <span class="pl-s1">typing</span> <span class="pl-k">import</span> <span class="pl-v">Iterable</span>, <span class="pl-v">Set</span>, <span class="pl-v">List</span>
+
+<span class="pl-k">import</span> <span class="pl-s1">numpy</span> <span class="pl-k">as</span> <span class="pl-s1">np</span>
+<span class="pl-k">import</span> <span class="pl-s1">maxframe</span>.<span class="pl-s1">dataframe</span> <span class="pl-k">as</span> <span class="pl-s1">md</span>
+<span class="pl-k">from</span> <span class="pl-s1">maxframe</span> <span class="pl-k">import</span> <span class="pl-s1">options</span>
+<span class="pl-k">from</span> <span class="pl-s1">maxframe</span>.<span class="pl-s1">session</span> <span class="pl-k">import</span> <span class="pl-s1">new_session</span>
+<span class="pl-k">from</span> <span class="pl-s1">maxframe</span>.<span class="pl-s1">udf</span> <span class="pl-k">import</span> <span class="pl-s1">with_python_requirements</span>
+<span class="pl-k">from</span> <span class="pl-s1">maxframe</span>.<span class="pl-s1">learn</span>.<span class="pl-s1">contrib</span>.<span class="pl-s1">graph</span> <span class="pl-k">import</span> <span class="pl-s1">connected_components</span>
+<span class="pl-k">from</span> <span class="pl-s1">odps</span> <span class="pl-k">import</span> <span class="pl-c1">ODPS</span>
+
+<span class="pl-k">import</span> <span class="pl-s1">logging</span>
+
+<span class="pl-s1">logging</span>.<span class="pl-c1">basicConfig</span>(<span class="pl-s1">level</span><span class="pl-c1">=</span><span class="pl-s1">logging</span>.<span class="pl-c1">INFO</span>)
+
+<span class="pl-c1">SEED</span> <span class="pl-c1">=</span> <span class="pl-c1">42</span>
+<span class="pl-c1">NON_ALPHA</span> <span class="pl-c1">=</span> <span class="pl-s1">re</span>.<span class="pl-c1">compile</span>(<span class="pl-s">"[^A-Za-z_0-9]"</span>)
+<span class="pl-c1">RNG</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">random</span>.<span class="pl-c1">RandomState</span>(<span class="pl-c1">SEED</span>)
+<span class="pl-c1">MAX_HASH</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>((<span class="pl-c1">1</span> <span class="pl-c1">&lt;&lt;</span> <span class="pl-c1">32</span>) <span class="pl-c1">-</span> <span class="pl-c1">1</span>)
+<span class="pl-c1">MERSENNE_PRIME</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>((<span class="pl-c1">1</span> <span class="pl-c1">&lt;&lt;</span> <span class="pl-c1">61</span>) <span class="pl-c1">-</span> <span class="pl-c1">1</span>)
+
+
+<span class="pl-c"># 通过相似度阈值和哈希函数个数，生成条带数量和条带行数参数</span>
+<span class="pl-k">def</span> <span class="pl-en">optimal_param</span>(
+    <span class="pl-s1">threshold</span>: <span class="pl-smi">float</span>,
+    <span class="pl-s1">num_perm</span>: <span class="pl-smi">int</span>,
+    <span class="pl-s1">false_positive_weight</span>: <span class="pl-smi">float</span> <span class="pl-c1">=</span> <span class="pl-c1">0.5</span>,
+    <span class="pl-s1">false_negative_weight</span>: <span class="pl-smi">float</span> <span class="pl-c1">=</span> <span class="pl-c1">0.5</span>,
+):
+    <span class="pl-k">from</span> <span class="pl-s1">scipy</span>.<span class="pl-s1">integrate</span> <span class="pl-k">import</span> <span class="pl-s1">quad</span> <span class="pl-k">as</span> <span class="pl-s1">integrate</span>
+
+    <span class="pl-k">def</span> <span class="pl-en">false_positive_probability</span>(<span class="pl-s1">threshold</span>: <span class="pl-smi">float</span>, <span class="pl-s1">b</span>: <span class="pl-smi">int</span>, <span class="pl-s1">r</span>: <span class="pl-smi">int</span>):
+        <span class="pl-s">"""Source: `datasketch.lsh`"""</span>
+
+        <span class="pl-k">def</span> <span class="pl-en">proba</span>(<span class="pl-s1">s</span>):
+            <span class="pl-k">return</span> <span class="pl-c1">1</span> <span class="pl-c1">-</span> (<span class="pl-c1">1</span> <span class="pl-c1">-</span> <span class="pl-s1">s</span> <span class="pl-c1">**</span> <span class="pl-en">float</span>(<span class="pl-s1">r</span>)) <span class="pl-c1">**</span> <span class="pl-en">float</span>(<span class="pl-s1">b</span>)
+
+        <span class="pl-s1">a</span>, <span class="pl-s1">_</span> <span class="pl-c1">=</span> <span class="pl-en">integrate</span>(<span class="pl-s1">proba</span>, <span class="pl-c1">0.0</span>, <span class="pl-s1">threshold</span>)
+        <span class="pl-k">return</span> <span class="pl-s1">a</span>
+
+    <span class="pl-k">def</span> <span class="pl-en">false_negative_probability</span>(<span class="pl-s1">threshold</span>: <span class="pl-smi">float</span>, <span class="pl-s1">b</span>: <span class="pl-smi">int</span>, <span class="pl-s1">r</span>: <span class="pl-smi">int</span>):
+        <span class="pl-s">"""Source: `datasketch.lsh`"""</span>
+
+        <span class="pl-k">def</span> <span class="pl-en">proba</span>(<span class="pl-s1">s</span>):
+            <span class="pl-k">return</span> <span class="pl-c1">1</span> <span class="pl-c1">-</span> (<span class="pl-c1">1</span> <span class="pl-c1">-</span> (<span class="pl-c1">1</span> <span class="pl-c1">-</span> <span class="pl-s1">s</span> <span class="pl-c1">**</span> <span class="pl-en">float</span>(<span class="pl-s1">r</span>)) <span class="pl-c1">**</span> <span class="pl-en">float</span>(<span class="pl-s1">b</span>))
+
+        <span class="pl-s1">a</span>, <span class="pl-s1">_</span> <span class="pl-c1">=</span> <span class="pl-en">integrate</span>(<span class="pl-s1">proba</span>, <span class="pl-s1">threshold</span>, <span class="pl-c1">1.0</span>)
+        <span class="pl-k">return</span> <span class="pl-s1">a</span>
+
+    <span class="pl-s1">min_error</span> <span class="pl-c1">=</span> <span class="pl-en">float</span>(<span class="pl-s">"inf"</span>)
+    <span class="pl-s1">opt</span> <span class="pl-c1">=</span> (<span class="pl-c1">0</span>, <span class="pl-c1">0</span>)
+    <span class="pl-k">for</span> <span class="pl-s1">b</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-c1">1</span>, <span class="pl-s1">num_perm</span> <span class="pl-c1">+</span> <span class="pl-c1">1</span>):
+        <span class="pl-s1">max_r</span> <span class="pl-c1">=</span> <span class="pl-en">int</span>(<span class="pl-s1">num_perm</span> <span class="pl-c1">/</span> <span class="pl-s1">b</span>)
+        <span class="pl-k">for</span> <span class="pl-s1">r</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-c1">1</span>, <span class="pl-s1">max_r</span> <span class="pl-c1">+</span> <span class="pl-c1">1</span>):
+            <span class="pl-s1">fp</span> <span class="pl-c1">=</span> <span class="pl-en">false_positive_probability</span>(<span class="pl-s1">threshold</span>, <span class="pl-s1">b</span>, <span class="pl-s1">r</span>)
+            <span class="pl-s1">fn</span> <span class="pl-c1">=</span> <span class="pl-en">false_negative_probability</span>(<span class="pl-s1">threshold</span>, <span class="pl-s1">b</span>, <span class="pl-s1">r</span>)
+            <span class="pl-s1">error</span> <span class="pl-c1">=</span> <span class="pl-s1">fp</span> <span class="pl-c1">*</span> <span class="pl-s1">false_positive_weight</span> <span class="pl-c1">+</span> <span class="pl-s1">fn</span> <span class="pl-c1">*</span> <span class="pl-s1">false_negative_weight</span>
+            <span class="pl-k">if</span> <span class="pl-s1">error</span> <span class="pl-c1">&lt;</span> <span class="pl-s1">min_error</span>:
+                <span class="pl-s1">min_error</span> <span class="pl-c1">=</span> <span class="pl-s1">error</span>
+                <span class="pl-s1">opt</span> <span class="pl-c1">=</span> (<span class="pl-s1">b</span>, <span class="pl-s1">r</span>)
+    <span class="pl-k">return</span> <span class="pl-s1">opt</span>
+
+
+<span class="pl-c"># 依赖 xxhash 完成 hash</span>
+<span class="pl-en">@<span class="pl-en">with_python_requirements</span>(<span class="pl-s">"xxhash"</span>)</span>
+<span class="pl-k">def</span> <span class="pl-en">generate_hash_values</span>(<span class="pl-s1">row</span>):
+    <span class="pl-s1">idx</span> <span class="pl-c1">=</span> <span class="pl-en">str</span>(<span class="pl-s1">row</span>[<span class="pl-c1">0</span>])
+    <span class="pl-s1">content</span> <span class="pl-c1">=</span> <span class="pl-s1">row</span>[<span class="pl-c1">1</span>]
+
+    <span class="pl-en">print</span>(<span class="pl-s1">idx</span>, <span class="pl-s1">content</span>[:<span class="pl-c1">10</span>], <span class="pl-s1">flush</span><span class="pl-c1">=</span><span class="pl-c1">True</span>)
+
+    <span class="pl-k">import</span> <span class="pl-s1">xxhash</span>
+
+    <span class="pl-k">def</span> <span class="pl-en">ngrams</span>(<span class="pl-s1">sequence</span>: <span class="pl-v">List</span>[<span class="pl-smi">str</span>], <span class="pl-s1">n</span>: <span class="pl-smi">int</span>, <span class="pl-s1">min_length</span>: <span class="pl-smi">int</span> <span class="pl-c1">=</span> <span class="pl-c1">5</span>) <span class="pl-c1">-&gt;</span> <span class="pl-smi">Iterable</span>:
+        <span class="pl-k">if</span> <span class="pl-en">len</span>(<span class="pl-s1">sequence</span>) <span class="pl-c1">&lt;</span> <span class="pl-s1">min_length</span>:
+            <span class="pl-k">return</span> []
+
+        <span class="pl-s1">iterables</span> <span class="pl-c1">=</span> <span class="pl-en">tee</span>(<span class="pl-s1">sequence</span>, <span class="pl-s1">n</span>)
+        <span class="pl-k">for</span> <span class="pl-s1">i</span>, <span class="pl-s1">sub_iterable</span> <span class="pl-c1">in</span> <span class="pl-en">enumerate</span>(<span class="pl-s1">iterables</span>):
+            <span class="pl-k">for</span> <span class="pl-s1">_</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-s1">i</span>):
+                <span class="pl-en">next</span>(<span class="pl-s1">sub_iterable</span>, <span class="pl-c1">None</span>)
+        <span class="pl-k">return</span> <span class="pl-en">zip</span>(<span class="pl-c1">*</span><span class="pl-s1">iterables</span>)
+
+    <span class="pl-k">def</span> <span class="pl-en">ngram_hashes</span>(<span class="pl-s1">content</span>: <span class="pl-smi">str</span>, <span class="pl-s1">n</span>: <span class="pl-smi">int</span>, <span class="pl-s1">min_length</span>: <span class="pl-smi">int</span> <span class="pl-c1">=</span> <span class="pl-c1">5</span>) <span class="pl-c1">-&gt;</span> <span class="pl-v">Set</span>[<span class="pl-smi">int</span>]:
+        <span class="pl-k">import</span> <span class="pl-s1">xxhash</span>
+
+        <span class="pl-c"># ========== edit ===========</span>
+        <span class="pl-s1">tokens</span>: <span class="pl-v">List</span>[<span class="pl-smi">str</span>] <span class="pl-c1">=</span> <span class="pl-c1">NON_ALPHA</span>.<span class="pl-c1">split</span>(<span class="pl-s1">content</span>.<span class="pl-c1">lower</span>())
+        <span class="pl-s1">ng</span>: <span class="pl-s1">set</span>[<span class="pl-smi">bytes</span>] <span class="pl-c1">=</span> {
+            <span class="pl-en">bytes</span>(<span class="pl-s">" "</span>.<span class="pl-c1">join</span>(<span class="pl-s1">t</span>).<span class="pl-c1">lower</span>(), <span class="pl-s">"utf-8"</span>) <span class="pl-k">for</span> <span class="pl-s1">t</span> <span class="pl-c1">in</span> <span class="pl-en">ngrams</span>(<span class="pl-s1">tokens</span>, <span class="pl-s1">n</span>, <span class="pl-s1">min_length</span>)
+        }
+        <span class="pl-k">return</span> {<span class="pl-s1">xxhash</span>.<span class="pl-c1">xxh32_intdigest</span>(<span class="pl-s1">n</span>) <span class="pl-k">for</span> <span class="pl-s1">n</span> <span class="pl-c1">in</span> <span class="pl-s1">ng</span>}
+
+    <span class="pl-c"># 获取 hash 生成的排列的参数</span>
+    <span class="pl-s1">a</span>, <span class="pl-s1">b</span> <span class="pl-c1">=</span> <span class="pl-c1">PERMUTATIONS</span>
+
+    <span class="pl-c"># 获得 ngram hash</span>
+    <span class="pl-s1">hashes</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">array</span>(
+        <span class="pl-en">list</span>(<span class="pl-en">ngram_hashes</span>(<span class="pl-s1">content</span>, <span class="pl-s1">args_ngram_size</span>, <span class="pl-s1">args_min_length</span>)), <span class="pl-s1">dtype</span><span class="pl-c1">=</span><span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>
+    )
+
+    <span class="pl-c"># 如果长度不足，不进行相似度判定</span>
+    <span class="pl-k">if</span> <span class="pl-en">len</span>(<span class="pl-s1">hashes</span>) <span class="pl-c1">==</span> <span class="pl-c1">0</span>:
+        <span class="pl-k">return</span>
+
+    <span class="pl-c"># 通过算法为每个 ngram 生成多个 hash 值</span>
+    <span class="pl-s1">chunk_size</span> <span class="pl-c1">=</span> <span class="pl-c1">100</span>
+    <span class="pl-s1">min_hashes</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">full</span>(<span class="pl-s1">args_num_perm</span>, <span class="pl-c1">MAX_HASH</span>)
+    <span class="pl-k">for</span> <span class="pl-s1">i</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-c1">0</span>, <span class="pl-en">len</span>(<span class="pl-s1">hashes</span>), <span class="pl-s1">chunk_size</span>):
+        <span class="pl-s1">chunk</span> <span class="pl-c1">=</span> <span class="pl-s1">hashes</span>[<span class="pl-s1">i</span> : <span class="pl-s1">i</span> <span class="pl-c1">+</span> <span class="pl-s1">chunk_size</span>]
+        <span class="pl-s1">p_hashes</span> <span class="pl-c1">=</span> ((<span class="pl-s1">np</span>.<span class="pl-c1">outer</span>(<span class="pl-s1">chunk</span>, <span class="pl-s1">a</span>) <span class="pl-c1">+</span> <span class="pl-s1">b</span>) <span class="pl-c1">%</span> <span class="pl-c1">MERSENNE_PRIME</span>) <span class="pl-c1">&amp;</span> <span class="pl-c1">MAX_HASH</span>
+        <span class="pl-s1">min_hashes</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">minimum</span>(<span class="pl-s1">min_hashes</span>, <span class="pl-s1">p_hashes</span>.<span class="pl-c1">min</span>(<span class="pl-s1">axis</span><span class="pl-c1">=</span><span class="pl-c1">0</span>))
+
+    <span class="pl-c"># 生成条带的 hash</span>
+    <span class="pl-v">Hs</span> <span class="pl-c1">=</span> [<span class="pl-en">bytes</span>(<span class="pl-s1">min_hashes</span>[<span class="pl-s1">start</span>:<span class="pl-s1">end</span>].<span class="pl-c1">byteswap</span>().<span class="pl-c1">data</span>) <span class="pl-k">for</span> <span class="pl-s1">start</span>, <span class="pl-s1">end</span> <span class="pl-c1">in</span> <span class="pl-c1">HASH_RANGES</span>]
+
+    <span class="pl-c"># 返回结果，结果为每个条带返回一行数据</span>
+    <span class="pl-k">for</span> <span class="pl-s1">band_idx</span>, <span class="pl-c1">H</span> <span class="pl-c1">in</span> <span class="pl-en">enumerate</span>(<span class="pl-v">Hs</span>):
+        <span class="pl-k">yield</span> <span class="pl-s1">band_idx</span>, <span class="pl-c1">H</span>.<span class="pl-c1">hex</span>(), <span class="pl-s1">idx</span>
+
+<span class="pl-s1">mapper_memory</span> <span class="pl-c1">=</span> <span class="pl-c1">4096</span>
+<span class="pl-s1">reducer_memory</span> <span class="pl-c1">=</span> <span class="pl-c1">12288</span>
+<span class="pl-s1">joiner_memory</span> <span class="pl-c1">=</span> <span class="pl-c1">12288</span>
+<span class="pl-s1">mapper_split_size</span> <span class="pl-c1">=</span> <span class="pl-c1">1024</span>
+<span class="pl-s1">instance_num</span> <span class="pl-c1">=</span> <span class="pl-c1">50000</span>
+
+<span class="pl-s1">input_table</span> <span class="pl-c1">=</span> <span class="pl-s">"xxx"</span>
+<span class="pl-s1">output_table</span> <span class="pl-c1">=</span> <span class="pl-s">"xxxx1"</span>
+
+<span class="pl-c"># content_hash</span>
+<span class="pl-s1">process_column</span> <span class="pl-c1">=</span> <span class="pl-s">"content_hash"</span>  <span class="pl-c">#之后需要改为content</span>
+<span class="pl-s1">lifecycle</span> <span class="pl-c1">=</span> <span class="pl-c1">365</span>
+<span class="pl-s1">partitions</span> <span class="pl-c1">=</span> <span class="pl-c1">None</span>  <span class="pl-c"># or None</span>
+
+<span class="pl-c"># 相似度阈值</span>
+<span class="pl-s1">args_threshold</span> <span class="pl-c1">=</span> <span class="pl-c1">0.6</span>  <span class="pl-c"># 0.6</span>
+<span class="pl-c"># 文本长度限制</span>
+<span class="pl-s1">args_min_length</span> <span class="pl-c1">=</span> <span class="pl-c1">5</span>  <span class="pl-c"># 5</span>
+<span class="pl-s1">args_ngram_size</span> <span class="pl-c1">=</span> <span class="pl-c1">5</span>  <span class="pl-c"># 5</span>
+<span class="pl-c"># hash 函数个数</span>
+<span class="pl-s1">args_num_perm</span> <span class="pl-c1">=</span> <span class="pl-c1">256</span>  <span class="pl-c"># 256</span>
+
+<span class="pl-c"># 关闭查询加速，在这个场景计算时间偏长，不适用mcqa</span>
+<span class="pl-s1">options</span>.<span class="pl-c1">sql</span>.<span class="pl-c1">enable_mcqa</span> <span class="pl-c1">=</span> <span class="pl-c1">False</span>
+
+<span class="pl-s1">sql_settings</span> <span class="pl-c1">=</span> {
+    <span class="pl-s">"odps.namespace.schema"</span>: <span class="pl-s">"true"</span>,
+    <span class="pl-s">"odps.session.image"</span>: <span class="pl-s">"common"</span>,
+    <span class="pl-s">"odps.function.timeout"</span>: <span class="pl-c1">3600</span>,
+    <span class="pl-s">"odps.sql.mapper.memory"</span>: <span class="pl-s1">mapper_memory</span>,  <span class="pl-c"># 弹内</span>
+    <span class="pl-s">"odps.stage.mapper.mem"</span>: <span class="pl-s1">mapper_memory</span>,  <span class="pl-c"># 弹外</span>
+    <span class="pl-s">"odps.sql.reducer.memory"</span>: <span class="pl-s1">reducer_memory</span>,  <span class="pl-c"># 弹内</span>
+    <span class="pl-s">"odps.stage.reducer.mem"</span>: <span class="pl-s1">reducer_memory</span>,  <span class="pl-c"># 弹外</span>
+    <span class="pl-s">"odps.sql.joiner.memory"</span>: <span class="pl-s1">joiner_memory</span>,  <span class="pl-c"># 弹内</span>
+    <span class="pl-s">"odps.stage.joiner.mem"</span>: <span class="pl-s1">joiner_memory</span>,  <span class="pl-c"># 弹外</span>
+    <span class="pl-s">"odps.stage.mapper.split.size"</span>: <span class="pl-s1">mapper_split_size</span>,
+    <span class="pl-s">"odps.sql.cfile2.field.maxsize"</span>: <span class="pl-c1">268435456</span>,
+    <span class="pl-s">"odps.task.merge.enabled"</span>: <span class="pl-c1">False</span>,
+    <span class="pl-s">"odps.sql.allow.fullscan"</span>: <span class="pl-s">"true"</span>,
+    <span class="pl-s">"odps.dag2.compound.config"</span>: <span class="pl-s">"fuxi.worker.reuse.policy:NO_REUSE"</span>,
+    <span class="pl-s">"odps.sql.window.function.newimpl"</span>: <span class="pl-s">"false"</span>,
+}
+
+<span class="pl-c"># 设置最大列的大小，并发</span>
+<span class="pl-k">if</span> <span class="pl-s1">instance_num</span>:
+    <span class="pl-s1">sql_settings</span>.<span class="pl-c1">update</span>(
+        {
+            <span class="pl-s">"odps.sql.split.dop"</span>: {<span class="pl-s1">input_table</span>: <span class="pl-en">int</span>(<span class="pl-s1">instance_num</span>)},
+            <span class="pl-s">"odps.stage.reducer.num"</span>: <span class="pl-c1">5000</span>,
+            <span class="pl-s">"odps.stage.joiner.num"</span>: <span class="pl-c1">5000</span>,
+            <span class="pl-s">"odps.sql.sys.flag.fuxi_MaxTaskWorkerCount"</span>: <span class="pl-en">int</span>(<span class="pl-s1">instance_num</span>),
+            <span class="pl-s">"odps.sql.max.desired.parallelism"</span>: <span class="pl-en">int</span>(<span class="pl-s1">instance_num</span>),
+            <span class="pl-s">"odps.job.workers.limit"</span>: <span class="pl-en">int</span>(<span class="pl-s1">instance_num</span>),
+        }
+    )
+<span class="pl-s1">options</span>.<span class="pl-c1">sql</span>.<span class="pl-c1">settings</span> <span class="pl-c1">=</span> <span class="pl-s1">sql_settings</span>
+<span class="pl-s1">options</span>.<span class="pl-c1">dag</span>.<span class="pl-c1">settings</span>.<span class="pl-c1">update</span>({<span class="pl-s">"codegen.groupby_first_value_allowed"</span>: <span class="pl-s">"true"</span>})
+
+<span class="pl-s1">o</span> <span class="pl-c1">=</span> <span class="pl-en">ODPS</span>(
+    <span class="pl-s1">access_id</span><span class="pl-c1">=</span><span class="pl-s">""</span>,
+    <span class="pl-s1">secret_access_key</span><span class="pl-c1">=</span><span class="pl-s">""</span>,
+    <span class="pl-s1">project</span><span class="pl-c1">=</span><span class="pl-s">"xxx"</span>,
+    <span class="pl-c"># endpoint="http://service.cn-hangzhou.maxcompute.aliyun.com/api",</span>
+    <span class="pl-s1">endpoint</span><span class="pl-c1">=</span><span class="pl-s">"https://service.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/api"</span>,
+)
+
+<span class="pl-s1">session</span> <span class="pl-c1">=</span> <span class="pl-en">new_session</span>(<span class="pl-s1">o</span>)
+<span class="pl-en">print</span>(<span class="pl-s">"session id: "</span>, <span class="pl-s1">session</span>.<span class="pl-c1">session_id</span>, <span class="pl-s1">flush</span><span class="pl-c1">=</span><span class="pl-c1">True</span>)
+<span class="pl-en">print</span>(<span class="pl-s">"session logview: "</span>, <span class="pl-s1">session</span>.<span class="pl-c1">get_logview_address</span>(), <span class="pl-s1">flush</span><span class="pl-c1">=</span><span class="pl-c1">True</span>)
+
+<span class="pl-c1">B</span>, <span class="pl-c1">R</span> <span class="pl-c1">=</span> <span class="pl-en">optimal_param</span>(<span class="pl-s1">args_threshold</span>, <span class="pl-s1">args_num_perm</span>)
+
+<span class="pl-c"># 生成 HashRange</span>
+<span class="pl-c1">HASH_RANGES</span> <span class="pl-c1">=</span> [(<span class="pl-s1">i</span> <span class="pl-c1">*</span> <span class="pl-c1">R</span>, (<span class="pl-s1">i</span> <span class="pl-c1">+</span> <span class="pl-c1">1</span>) <span class="pl-c1">*</span> <span class="pl-c1">R</span>) <span class="pl-k">for</span> <span class="pl-s1">i</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-c1">B</span>)]
+
+<span class="pl-c"># 生成 Hash 函数参数</span>
+<span class="pl-c1">PERMUTATIONS</span> <span class="pl-c1">=</span> <span class="pl-s1">np</span>.<span class="pl-c1">array</span>(
+    [
+        (
+            <span class="pl-c1">RNG</span>.<span class="pl-c1">randint</span>(<span class="pl-c1">1</span>, <span class="pl-c1">MERSENNE_PRIME</span>, <span class="pl-s1">dtype</span><span class="pl-c1">=</span><span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>),
+            <span class="pl-c1">RNG</span>.<span class="pl-c1">randint</span>(<span class="pl-c1">0</span>, <span class="pl-c1">MERSENNE_PRIME</span>, <span class="pl-s1">dtype</span><span class="pl-c1">=</span><span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>),
+        )
+        <span class="pl-k">for</span> <span class="pl-s1">_</span> <span class="pl-c1">in</span> <span class="pl-en">range</span>(<span class="pl-s1">args_num_perm</span>)
+    ],
+    <span class="pl-s1">dtype</span><span class="pl-c1">=</span><span class="pl-s1">np</span>.<span class="pl-c1">uint64</span>,
+).<span class="pl-c1">T</span>
+
+<span class="pl-s1">df</span> <span class="pl-c1">=</span> <span class="pl-s1">md</span>.<span class="pl-c1">read_odps_table</span>(<span class="pl-s1">input_table</span>, <span class="pl-s1">partitions</span><span class="pl-c1">=</span><span class="pl-s1">partitions</span>)
+
+<span class="pl-c"># 直接对相同文本去重</span>
+<span class="pl-s1">df</span> <span class="pl-c1">=</span> <span class="pl-s1">df</span>.<span class="pl-c1">drop_duplicates</span>(<span class="pl-s1">subset</span><span class="pl-c1">=</span>[<span class="pl-s1">process_column</span>], <span class="pl-s1">keep</span><span class="pl-c1">=</span><span class="pl-s">"first"</span>)
+
+<span class="pl-c"># # 过滤 text 为空的行, 生成 index 列</span>
+<span class="pl-s1">df</span> <span class="pl-c1">=</span> <span class="pl-s1">df</span>.<span class="pl-c1">reset_index</span>(<span class="pl-s1">drop</span><span class="pl-c1">=</span><span class="pl-c1">False</span>).<span class="pl-c1">rename</span>(<span class="pl-s1">columns</span><span class="pl-c1">=</span>{<span class="pl-s">"index"</span>: <span class="pl-s">"_doc_id"</span>})
+<span class="pl-c"># 触发计算并缓存结果, 通过 display 预览</span>
+<span class="pl-s1">df</span>.<span class="pl-c1">execute</span>()
+
+<span class="pl-c"># # 投影出所需的数据</span>
+<span class="pl-s1">docid_docinfo_df</span> <span class="pl-c1">=</span> <span class="pl-s1">df</span>[[<span class="pl-s">"_doc_id"</span>, <span class="pl-s1">process_column</span>]]
+
+<span class="pl-c"># # 应用 udtf 生成所有的 MinHash 和 LSH</span>
+<span class="pl-s1">hash_df</span> <span class="pl-c1">=</span> <span class="pl-s1">docid_docinfo_df</span>.<span class="pl-c1">mf</span>.<span class="pl-c1">flatmap</span>(
+    <span class="pl-s1">generate_hash_values</span>,
+    <span class="pl-s1">dtypes</span><span class="pl-c1">=</span>{<span class="pl-s">"band_idx"</span>: <span class="pl-s1">np</span>.<span class="pl-c1">int_</span>, <span class="pl-s">"hash"</span>: <span class="pl-s1">np</span>.<span class="pl-c1">str_</span>, <span class="pl-s">"_doc_id"</span>: <span class="pl-s1">np</span>.<span class="pl-c1">str_</span>},
+    <span class="pl-s1">raw</span><span class="pl-c1">=</span><span class="pl-c1">True</span>,
+)
+
+<span class="pl-s1">hash_df_temp</span> <span class="pl-c1">=</span> <span class="pl-s">"tmp_hash_df"</span>
+<span class="pl-s1">md</span>.<span class="pl-c1">to_odps_table</span>(
+    <span class="pl-s1">hash_df</span>, <span class="pl-s1">hash_df_temp</span>, <span class="pl-s1">index</span><span class="pl-c1">=</span><span class="pl-c1">False</span>, <span class="pl-s1">overwrite</span><span class="pl-c1">=</span><span class="pl-c1">True</span>, <span class="pl-s1">lifecycle</span><span class="pl-c1">=</span><span class="pl-c1">7</span>
+).<span class="pl-c1">execute</span>()
+
+<span class="pl-s1">components_df</span> <span class="pl-c1">=</span> <span class="pl-s1">md</span>.<span class="pl-c1">read_odps_query</span>(
+    <span class="pl-s">f"""</span>
+<span class="pl-s">    select distinct similar_docs as index, similar_docs as id, _doc_id as component from (</span>
+<span class="pl-s">        select cast (_doc_id as bigint) as similar_docs,</span>
+<span class="pl-s">                            MIN(cast (_doc_id as bigint)) over(PARTITION BY band_idx, hash) as _doc_id,</span>
+<span class="pl-s">                            RANK() over (PARTITION BY band_idx,hash ORDER BY cast (_doc_id as bigint) ASC) as rnk from <span class="pl-s1"><span class="pl-kos">{</span><span class="pl-s1">hash_df_temp</span><span class="pl-kos">}</span></span></span>
+<span class="pl-s">    ) where rnk &gt; 1</span>
+<span class="pl-s">    """</span>,
+    <span class="pl-s1">index_col</span><span class="pl-c1">=</span><span class="pl-s">"index"</span>,
+)
+<span class="pl-s1">converged</span> <span class="pl-c1">=</span> <span class="pl-c1">False</span>
+
+<span class="pl-s1">round</span> <span class="pl-c1">=</span> <span class="pl-c1">0</span>
+<span class="pl-c"># 计算完整联通分量</span>
+<span class="pl-k">while</span> <span class="pl-c1">not</span> <span class="pl-s1">converged</span>:
+    <span class="pl-s1">round</span> <span class="pl-c1">=</span> <span class="pl-s1">round</span> <span class="pl-c1">+</span> <span class="pl-c1">1</span>
+    <span class="pl-s1">components_df</span>, <span class="pl-s1">converged_scalar</span> <span class="pl-c1">=</span> <span class="pl-en">connected_components</span>(
+        <span class="pl-s1">components_df</span>, <span class="pl-s">"id"</span>, <span class="pl-s">"component"</span>, <span class="pl-c1">6</span>
+    )
+    <span class="pl-s1">session</span>.<span class="pl-c1">execute</span>(<span class="pl-s1">components_df</span>, <span class="pl-s1">converged_scalar</span>)
+    <span class="pl-s1">converged</span> <span class="pl-c1">=</span> <span class="pl-s1">converged_scalar</span>.<span class="pl-c1">fetch</span>()
+
+<span class="pl-s1">components_df</span> <span class="pl-c1">=</span> <span class="pl-s1">components_df</span>.<span class="pl-c1">set_index</span>(<span class="pl-s">"id"</span>)
+<span class="pl-s1">result_df</span> <span class="pl-c1">=</span> <span class="pl-s1">df</span>.<span class="pl-c1">merge</span>(<span class="pl-s1">components_df</span>, <span class="pl-s1">left_on</span><span class="pl-c1">=</span><span class="pl-s">"_doc_id"</span>, <span class="pl-s1">right_index</span><span class="pl-c1">=</span><span class="pl-c1">True</span>, <span class="pl-s1">how</span><span class="pl-c1">=</span><span class="pl-s">"left"</span>)
+<span class="pl-s1">result_df</span> <span class="pl-c1">=</span> <span class="pl-s1">result_df</span>[<span class="pl-s1">result_df</span>[<span class="pl-s">"component"</span>].<span class="pl-c1">isnull</span>()]
+<span class="pl-s1">result_df</span> <span class="pl-c1">=</span> <span class="pl-s1">result_df</span>.<span class="pl-c1">drop</span>([<span class="pl-s">"component"</span>, <span class="pl-s">"_doc_id"</span>], <span class="pl-s1">axis</span><span class="pl-c1">=</span><span class="pl-c1">1</span>)
+
+<span class="pl-s1">md</span>.<span class="pl-c1">to_odps_table</span>(
+    <span class="pl-s1">result_df</span>, <span class="pl-s1">output_table</span>, <span class="pl-s1">lifecycle</span><span class="pl-c1">=</span><span class="pl-s1">lifecycle</span>, <span class="pl-s1">overwrite</span><span class="pl-c1">=</span><span class="pl-c1">True</span>, <span class="pl-s1">index</span><span class="pl-c1">=</span><span class="pl-c1">False</span>
+).<span class="pl-c1">execute</span>()
+
+<span class="pl-s1">session</span>.<span class="pl-c1">destroy</span>()</pre></div></div>
+<div style="font-size:small;margin-top:8px;float:right;"></div>
+
+<button class="btn btn-block" type="button" onclick="openComments()" id="cmButton">评论</button>
+<div class="comments" id="comments"></div>
+
+</div>
+    <div id="footer"><div id="footer1">Copyright © <span id="copyrightYear"></span> <a href="https://enderTree.github.io/blog">ender'Blog</a></div>
+<div id="footer2">
+    <span id="runday"></span><span>Powered by <a href="https://meekdai.com/Gmeek.html" target="_blank">Gmeek</a></span>
+</div>
+
+<script>
+var now=new Date();
+document.getElementById("copyrightYear").innerHTML=now.getFullYear();
+
+if(""!=""){
+    var startSite=new Date("");
+    var diff=now.getTime()-startSite.getTime();
+    var diffDay=Math.floor(diff/(1000*60*60*24));
+    document.getElementById("runday").innerHTML="网站运行"+diffDay+"天"+" • ";
+}
+</script></div>
+</body>
+<script>
+var IconList={'sun': 'M8 10.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8 12a4 4 0 100-8 4 4 0 000 8zM8 0a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V.75A.75.75 0 018 0zm0 13a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 018 13zM2.343 2.343a.75.75 0 011.061 0l1.06 1.061a.75.75 0 01-1.06 1.06l-1.06-1.06a.75.75 0 010-1.06zm9.193 9.193a.75.75 0 011.06 0l1.061 1.06a.75.75 0 01-1.06 1.061l-1.061-1.06a.75.75 0 010-1.061zM16 8a.75.75 0 01-.75.75h-1.5a.75.75 0 010-1.5h1.5A.75.75 0 0116 8zM3 8a.75.75 0 01-.75.75H.75a.75.75 0 010-1.5h1.5A.75.75 0 013 8zm10.657-5.657a.75.75 0 010 1.061l-1.061 1.06a.75.75 0 11-1.06-1.06l1.06-1.06a.75.75 0 011.06 0zm-9.193 9.193a.75.75 0 010 1.06l-1.06 1.061a.75.75 0 11-1.061-1.06l1.06-1.061a.75.75 0 011.061 0z', 'moon': 'M9.598 1.591a.75.75 0 01.785-.175 7 7 0 11-8.967 8.967.75.75 0 01.961-.96 5.5 5.5 0 007.046-7.046.75.75 0 01.175-.786zm1.616 1.945a7 7 0 01-7.678 7.678 5.5 5.5 0 107.678-7.678z', 'sync': 'M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z', 'home': 'M6.906.664a1.749 1.749 0 0 1 2.187 0l5.25 4.2c.415.332.657.835.657 1.367v7.019A1.75 1.75 0 0 1 13.25 15h-3.5a.75.75 0 0 1-.75-.75V9H7v5.25a.75.75 0 0 1-.75.75h-3.5A1.75 1.75 0 0 1 1 13.25V6.23c0-.531.242-1.034.657-1.366l5.25-4.2Zm1.25 1.171a.25.25 0 0 0-.312 0l-5.25 4.2a.25.25 0 0 0-.094.196v7.019c0 .138.112.25.25.25H5.5V8.25a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 .75.75v5.25h2.75a.25.25 0 0 0 .25-.25V6.23a.25.25 0 0 0-.094-.195Z', 'github': 'M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z', 'copy': 'M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z', 'check': 'M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z'};
+var utterancesLoad=0;
+
+let themeSettings={
+    "dark": ["dark","moon","#00f0ff","dark-blue"],
+    "light": ["light","sun","#ff5000","github-light"],
+    "auto": ["auto","sync","","preferred-color-scheme"]
+};
+function changeTheme(mode, icon, color, utheme){
+    document.documentElement.setAttribute("data-color-mode",mode);
+    document.getElementById("themeSwitch").setAttribute("d",value=IconList[icon]);
+    document.getElementById("themeSwitch").parentNode.style.color=color;
+    if(utterancesLoad==1){utterancesTheme(utheme);}
+}
+function modeSwitch(){
+    let currentMode=document.documentElement.getAttribute('data-color-mode');
+    let newMode = currentMode === "light" ? "dark" : currentMode === "dark" ? "auto" : "light";
+    localStorage.setItem("meek_theme", newMode);
+    if(themeSettings[newMode]){
+        changeTheme(...themeSettings[newMode]);
+    }
+}
+function utterancesTheme(theme){
+    const message={type:'set-theme',theme: theme};
+    const iframe=document.getElementsByClassName('utterances-frame')[0];
+    iframe.contentWindow.postMessage(message,'https://utteranc.es');
+}
+if(themeSettings[theme]){changeTheme(...themeSettings[theme]);}
+console.log("\n %c Gmeek last https://github.com/Meekdai/Gmeek \n","padding:5px 0;background:#02d81d;color:#fff");
+</script>
+
+<script>
+document.getElementById("pathHome").setAttribute("d",IconList["home"]);
+document.getElementById("pathIssue").setAttribute("d",IconList["github"]);
+
+
+
+function openComments(){
+    cm=document.getElementById("comments");
+    cmButton=document.getElementById("cmButton");
+    cmButton.innerHTML="loading";
+    span=document.createElement("span");
+    span.setAttribute("class","AnimatedEllipsis");
+    cmButton.appendChild(span);
+
+    script=document.createElement("script");
+    script.setAttribute("src","https://utteranc.es/client.js");
+    script.setAttribute("repo","enderTree/blog");
+    script.setAttribute("issue-term","title");
+    
+    if(localStorage.getItem("meek_theme")=="dark"){script.setAttribute("theme","dark-blue");}
+    else if(localStorage.getItem("meek_theme")=="light") {script.setAttribute("theme","github-light");}
+    else{script.setAttribute("theme","preferred-color-scheme");}
+    
+    script.setAttribute("crossorigin","anonymous");
+    script.setAttribute("async","");
+    cm.appendChild(script);
+
+    int=self.setInterval("iFrameLoading()",200);
+}
+
+function iFrameLoading(){
+    var utterances=document.getElementsByClassName('utterances');
+    if(utterances.length==1){
+        if(utterances[0].style.height!=""){
+            utterancesLoad=1;
+            int=window.clearInterval(int);
+            document.getElementById("cmButton").style.display="none";
+            console.log("utterances Load OK");
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const createClipboardHTML = (codeContent, additionalClasses = '') => `
+        <pre class="notranslate"><code class="notranslate">${codeContent}</code></pre>
+        <div class="clipboard-container position-absolute right-0 top-0 ${additionalClasses}">
+            <clipboard-copy class="ClipboardButton btn m-2 p-0" role="button" style="display: inherit;">
+                <svg height="16" width="16" class="octicon octicon-copy m-2"><path d="${IconList["copy"]}"></path></svg>
+                <svg height="16" width="16" class="octicon octicon-check color-fg-success m-2 d-none"><path d="${IconList["check"]}"></path></svg>
+            </clipboard-copy>
+            <div class="copy-feedback">Copied!</div>
+        </div>
+    `;
+
+    const handleCodeElements = (selector = '') => {
+        document.querySelectorAll(selector).forEach(codeElement => {
+            const codeContent = codeElement.innerHTML;
+            const newStructure = document.createElement('div');
+            newStructure.className = 'snippet-clipboard-content position-relative overflow-auto';
+            newStructure.innerHTML = createClipboardHTML(codeContent);
+
+            const parentElement = codeElement.parentElement;
+            if (selector.includes('highlight')) {
+                parentElement.insertBefore(newStructure, codeElement.nextSibling);
+                parentElement.removeChild(codeElement);
+            } else {
+                parentElement.parentElement.replaceChild(newStructure, parentElement);
+            }
+        });
+    };
+
+    handleCodeElements('pre.notranslate > code.notranslate');
+    handleCodeElements('div.highlight > pre.notranslate');
+
+    let currentFeedback = null;
+    document.querySelectorAll('clipboard-copy').forEach(copyButton => {
+        copyButton.addEventListener('click', () => {
+            const codeContent = copyButton.closest('.snippet-clipboard-content').innerText;
+            const tempTextArea = document.createElement('textarea');
+            tempTextArea.value = codeContent;
+            document.body.appendChild(tempTextArea);
+            tempTextArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempTextArea);
+
+            const copyIcon = copyButton.querySelector('.octicon-copy');
+            const checkIcon = copyButton.querySelector('.octicon-check');
+            const copyFeedback = copyButton.nextElementSibling;
+
+            if (currentFeedback && currentFeedback !== copyFeedback) {currentFeedback.style.display = 'none';}
+            currentFeedback = copyFeedback;
+
+            copyIcon.classList.add('d-none');
+            checkIcon.classList.remove('d-none');
+            copyFeedback.style.display = 'block';
+            copyButton.style.borderColor = 'var(--color-success-fg)';
+
+            setTimeout(() => {
+                copyIcon.classList.remove('d-none');
+                checkIcon.classList.add('d-none');
+                copyFeedback.style.display = 'none';
+                copyButton.style.borderColor = '';
+            }, 2000);
+        });
+    });
+});
+
+</script>
+<script src='https://blog.meekdai.com/Gmeek/plugins/GmeekTOC.js'></script><script src='https://blog.meekdai.com/Gmeek/plugins/lightbox.js'></script>
+
+</html>
