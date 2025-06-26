@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Thu, 26 Jun 2025 09:14:47 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>MaxFrame实现minhash Dedup</title><link>https://enderTree.github.io/blog/post/MaxFrame-shi-xian-minhash%20Dedup.html</link><description>```python
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Thu, 26 Jun 2025 16:22:19 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>MaxFrame实现minhash Dedup</title><link>https://enderTree.github.io/blog/post/MaxFrame-shi-xian-minhash%20Dedup.html</link><description>```python
 import re
 from itertools import tee
 from typing import Iterable, Set, List
@@ -573,38 +573,7 @@ SELECT
     FIRST_VALUE(c2, True) over(order by c0 ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
 FROM 
     mian_data 
-```。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</guid><pubDate>Wed, 25 Jun 2025 03:38:36 +0000</pubDate></item><item><title>test</title><link>https://enderTree.github.io/blog/post/test.html</link><description>```sql
-
-SELECT
-    *
-FROM
-(
-
-    SELECT
-        tag,
-        doc_cnt,
-        (doc_cnt/SUM(doc_cnt) OVER())*100
-    FROM
-    (
-        SELECT 
-            tag,
-            SUM(doc_cnt) AS doc_cnt
-        FROM
-            dwd_crawler_host_classification_di a
-        LEFT ANTI JOIN 
-            tmp_gumu_data_0624_2 b
-            ON a.host = b.host
-        WHERE
-            ymd = '2025-06-23'
-            AND tag_type = 'topic'
-        GROUP BY 
-            tag
-    )
-)
-WHERE 
-    tag = 'Advertising_&amp;_Marketing'
-;
-```。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/test.html</guid><pubDate>Wed, 25 Jun 2025 02:50:59 +0000</pubDate></item><item><title>个人简历</title><link>https://enderTree.github.io/blog/resume.html</link><description># 个人信息
+```。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/chuang-kou-han-shu-de-yi-xie-shi-yong.html</guid><pubDate>Wed, 25 Jun 2025 03:38:36 +0000</pubDate></item><item><title>个人简历</title><link>https://enderTree.github.io/blog/resume.html</link><description># 个人信息
 
 - 冷熊/男/1990
 - 本科/北极大学计算机系
