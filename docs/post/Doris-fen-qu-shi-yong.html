@@ -13,7 +13,7 @@
 <meta name="description" content="### 1. range分区
 1. 建表
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     `ymd` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -57,20 +57,20 @@ PROPERTIES (
 ```
 2. 临时开启历史分区创建
 ```sql
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.start' = '-90',
     'dynamic_partition.create_history_partition' = 'true'
 );
 -- 等待一段时间 （10分钟左右）
-SHOW PARTITIONS FROM dws_xingye_discovery_page_stats_usr_di;
+SHOW PARTITIONS FROM xxx;
 
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.create_history_partition' = 'false'
 );
 ```
 ### 1. list分区
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     ymd varchar(50) NULL,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -102,15 +102,15 @@ PROPERTIES (
     'group_commit_interval_ms' = '10000',
     'group_commit_data_bytes' = '134217728'
 );
-delete from  dws_xingye_discovery_page_stats_usr_di where ymd = '${P_DATE}' ;
-alter table dws_xingye_discovery_page_stats_usr_di add partition p_${p_date} VALUES IN (('${P_DATE}'))
+delete from  xxx where ymd = '${P_DATE}' ;
+alter table xxx add partition p_${p_date} VALUES IN (('${P_DATE}'))
 ```
 。">
 <meta property="og:title" content="Doris分区使用">
 <meta property="og:description" content="### 1. range分区
 1. 建表
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     `ymd` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -154,20 +154,20 @@ PROPERTIES (
 ```
 2. 临时开启历史分区创建
 ```sql
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.start' = '-90',
     'dynamic_partition.create_history_partition' = 'true'
 );
 -- 等待一段时间 （10分钟左右）
-SHOW PARTITIONS FROM dws_xingye_discovery_page_stats_usr_di;
+SHOW PARTITIONS FROM xxx;
 
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.create_history_partition' = 'false'
 );
 ```
 ### 1. list分区
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     ymd varchar(50) NULL,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -199,8 +199,8 @@ PROPERTIES (
     'group_commit_interval_ms' = '10000',
     'group_commit_data_bytes' = '134217728'
 );
-delete from  dws_xingye_discovery_page_stats_usr_di where ymd = '${P_DATE}' ;
-alter table dws_xingye_discovery_page_stats_usr_di add partition p_${p_date} VALUES IN (('${P_DATE}'))
+delete from  xxx where ymd = '${P_DATE}' ;
+alter table xxx add partition p_${p_date} VALUES IN (('${P_DATE}'))
 ```
 。">
 <meta property="og:type" content="article">
@@ -277,7 +277,7 @@ body{box-sizing: border-box;min-width: 200px;max-width: 900px;margin: 20px auto;
 <ol>
 <li>建表</li>
 </ol>
-<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">CREATE</span> <span class="pl-k">TABLE</span> `<span class="pl-en">dws_xingye_discovery_page_stats_usr_di</span>` (
+<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">CREATE</span> <span class="pl-k">TABLE</span> `<span class="pl-en">xxx</span>` (
     <span class="pl-s"><span class="pl-pds">`</span>ymd<span class="pl-pds">`</span></span> datetime <span class="pl-k">NOT NULL</span> DEFAULT <span class="pl-c1">CURRENT_TIMESTAMP</span>,
     user_id <span class="pl-k">varchar</span>(<span class="pl-c1">100</span>) COMMENT <span class="pl-s"><span class="pl-pds">'</span>用户ID<span class="pl-pds">'</span></span>,
     platform <span class="pl-k">varchar</span>(<span class="pl-c1">50</span>) COMMENT <span class="pl-s"><span class="pl-pds">'</span>平台<span class="pl-pds">'</span></span>,
@@ -321,18 +321,18 @@ PROPERTIES (
 <ol start="2">
 <li>临时开启历史分区创建</li>
 </ol>
-<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">ALTER</span> <span class="pl-k">TABLE</span> dws_xingye_discovery_page_stats_usr_di <span class="pl-k">SET</span> (
+<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">ALTER</span> <span class="pl-k">TABLE</span> xxx <span class="pl-k">SET</span> (
     <span class="pl-s"><span class="pl-pds">"</span>dynamic_partition.start<span class="pl-pds">"</span></span> <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>-90<span class="pl-pds">"</span></span>,
     <span class="pl-s"><span class="pl-pds">"</span>dynamic_partition.create_history_partition<span class="pl-pds">"</span></span> <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>true<span class="pl-pds">"</span></span>
 );
 <span class="pl-c"><span class="pl-c">--</span> 等待一段时间 （10分钟左右）</span>
-SHOW PARTITIONS <span class="pl-k">FROM</span> dws_xingye_discovery_page_stats_usr_di;
+SHOW PARTITIONS <span class="pl-k">FROM</span> xxx;
 
-<span class="pl-k">ALTER</span> <span class="pl-k">TABLE</span> dws_xingye_discovery_page_stats_usr_di <span class="pl-k">SET</span> (
+<span class="pl-k">ALTER</span> <span class="pl-k">TABLE</span> xxx <span class="pl-k">SET</span> (
     <span class="pl-s"><span class="pl-pds">"</span>dynamic_partition.create_history_partition<span class="pl-pds">"</span></span> <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>false<span class="pl-pds">"</span></span>
 );</pre></div>
 <h3>1. list分区</h3>
-<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">CREATE</span> <span class="pl-k">TABLE</span> `<span class="pl-en">dws_xingye_discovery_page_stats_usr_di</span>` (
+<div class="highlight highlight-source-sql"><pre class="notranslate"><span class="pl-k">CREATE</span> <span class="pl-k">TABLE</span> `<span class="pl-en">xxx</span>` (
     ymd <span class="pl-k">varchar</span>(<span class="pl-c1">50</span>) <span class="pl-k">NULL</span>,
     user_id <span class="pl-k">varchar</span>(<span class="pl-c1">100</span>) COMMENT <span class="pl-s"><span class="pl-pds">'</span>用户ID<span class="pl-pds">'</span></span>,
     platform <span class="pl-k">varchar</span>(<span class="pl-c1">50</span>) COMMENT <span class="pl-s"><span class="pl-pds">'</span>平台<span class="pl-pds">'</span></span>,
@@ -364,8 +364,8 @@ PROPERTIES (
     <span class="pl-s"><span class="pl-pds">"</span>group_commit_interval_ms<span class="pl-pds">"</span></span> <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>10000<span class="pl-pds">"</span></span>,
     <span class="pl-s"><span class="pl-pds">"</span>group_commit_data_bytes<span class="pl-pds">"</span></span> <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>134217728<span class="pl-pds">"</span></span>
 );
-<span class="pl-k">delete</span> <span class="pl-k">from</span>  dws_xingye_discovery_page_stats_usr_di <span class="pl-k">where</span> ymd <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>${P_DATE}<span class="pl-pds">"</span></span> ;
-<span class="pl-k">alter</span> <span class="pl-k">table</span> dws_xingye_discovery_page_stats_usr_di add partition p_${p_date} <span class="pl-k">VALUES</span> <span class="pl-k">IN</span> ((<span class="pl-s"><span class="pl-pds">"</span>${P_DATE}<span class="pl-pds">"</span></span>))</pre></div></div>
+<span class="pl-k">delete</span> <span class="pl-k">from</span>  xxx <span class="pl-k">where</span> ymd <span class="pl-k">=</span> <span class="pl-s"><span class="pl-pds">"</span>${P_DATE}<span class="pl-pds">"</span></span> ;
+<span class="pl-k">alter</span> <span class="pl-k">table</span> xxx add partition p_${p_date} <span class="pl-k">VALUES</span> <span class="pl-k">IN</span> ((<span class="pl-s"><span class="pl-pds">"</span>${P_DATE}<span class="pl-pds">"</span></span>))</pre></div></div>
 <div style="font-size:small;margin-top:8px;float:right;"></div>
 
 <button class="btn btn-block" type="button" onclick="openComments()" id="cmButton">评论</button>

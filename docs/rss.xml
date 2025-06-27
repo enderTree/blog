@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Fri, 27 Jun 2025 03:35:44 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>Doris分区使用</title><link>https://enderTree.github.io/blog/post/Doris-fen-qu-shi-yong.html</link><description>### 1. range分区
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>ender'Blog</title><link>https://enderTree.github.io/blog</link><description>闭关ING</description><copyright>ender'Blog</copyright><docs>http://www.rssboard.org/rss-specification</docs><generator>python-feedgen</generator><image><url>https://github.githubassets.com/favicons/favicon.svg</url><title>avatar</title><link>https://enderTree.github.io/blog</link></image><lastBuildDate>Fri, 27 Jun 2025 03:41:05 +0000</lastBuildDate><managingEditor>ender'Blog</managingEditor><ttl>60</ttl><webMaster>ender'Blog</webMaster><item><title>Doris分区使用</title><link>https://enderTree.github.io/blog/post/Doris-fen-qu-shi-yong.html</link><description>### 1. range分区
 1. 建表
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     `ymd` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -46,20 +46,20 @@ PROPERTIES (
 ```
 2. 临时开启历史分区创建
 ```sql
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.start' = '-90',
     'dynamic_partition.create_history_partition' = 'true'
 );
 -- 等待一段时间 （10分钟左右）
-SHOW PARTITIONS FROM dws_xingye_discovery_page_stats_usr_di;
+SHOW PARTITIONS FROM xxx;
 
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     'dynamic_partition.create_history_partition' = 'false'
 );
 ```
 ### 1. list分区
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     ymd varchar(50) NULL,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -91,8 +91,8 @@ PROPERTIES (
     'group_commit_interval_ms' = '10000',
     'group_commit_data_bytes' = '134217728'
 );
-delete from  dws_xingye_discovery_page_stats_usr_di where ymd = '${P_DATE}' ;
-alter table dws_xingye_discovery_page_stats_usr_di add partition p_${p_date} VALUES IN (('${P_DATE}'))
+delete from  xxx where ymd = '${P_DATE}' ;
+alter table xxx add partition p_${p_date} VALUES IN (('${P_DATE}'))
 ```
 。</description><guid isPermaLink="true">https://enderTree.github.io/blog/post/Doris-fen-qu-shi-yong.html</guid><pubDate>Fri, 27 Jun 2025 03:35:16 +0000</pubDate></item><item><title>MaxFrame实现minhash Dedup</title><link>https://enderTree.github.io/blog/post/MaxFrame-shi-xian-minhash%20Dedup.html</link><description>```python
 import re

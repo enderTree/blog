@@ -1,7 +1,7 @@
 ### 1. range分区
 1. 建表
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     `ymd` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -45,20 +45,20 @@ PROPERTIES (
 ```
 2. 临时开启历史分区创建
 ```sql
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     "dynamic_partition.start" = "-90",
     "dynamic_partition.create_history_partition" = "true"
 );
 -- 等待一段时间 （10分钟左右）
-SHOW PARTITIONS FROM dws_xingye_discovery_page_stats_usr_di;
+SHOW PARTITIONS FROM xxx;
 
-ALTER TABLE dws_xingye_discovery_page_stats_usr_di SET (
+ALTER TABLE xxx SET (
     "dynamic_partition.create_history_partition" = "false"
 );
 ```
 ### 1. list分区
 ```sql
-CREATE TABLE `dws_xingye_discovery_page_stats_usr_di` (
+CREATE TABLE `xxx` (
     ymd varchar(50) NULL,
     user_id varchar(100) COMMENT '用户ID',
     platform varchar(50) COMMENT '平台',
@@ -90,6 +90,6 @@ PROPERTIES (
     "group_commit_interval_ms" = "10000",
     "group_commit_data_bytes" = "134217728"
 );
-delete from  dws_xingye_discovery_page_stats_usr_di where ymd = "${P_DATE}" ;
-alter table dws_xingye_discovery_page_stats_usr_di add partition p_${p_date} VALUES IN (("${P_DATE}"))
+delete from  xxx where ymd = "${P_DATE}" ;
+alter table xxx add partition p_${p_date} VALUES IN (("${P_DATE}"))
 ```
